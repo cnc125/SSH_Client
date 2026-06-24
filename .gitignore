@@ -1,0 +1,8 @@
+# Compiled binaries
+*.o
+*.out
+a.out
+SSH-Cli        # your actual binary, if it has the same name as the folder
+
+# Editor/IDE clutter
+.vscode/
