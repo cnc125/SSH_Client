@@ -23,6 +23,7 @@ Socket::~Socket() {
     close();
 }
 
+//sets up file descriptor and sets to non-blocking returns true if successful
 bool Socket::create() {
     //get file descriptor that uses IPV4 and TCP
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -39,6 +40,8 @@ bool Socket::create() {
     return true;
 }
 
+//connects over TCP using provideded host and port number
+//registers file descriptor with epoll
 bool Socket::connect(const std::string& host, uint16_t port) {
     sockaddr_in addr;
     //IPV4 address
@@ -65,6 +68,7 @@ bool Socket::connect(const std::string& host, uint16_t port) {
     return false;
 }
 
+//registers a file descriptor with epoll
 bool Socket::register_with_epoll() {
     epoll_event event;
     event.data.ptr = this;
@@ -80,6 +84,7 @@ bool Socket::register_with_epoll() {
     return true;
 }
 
+//function handles epoll events by calling approriate write and read helpers
 bool Socket::handle_epoll_event(uint32_t events) {
 
     if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
@@ -115,6 +120,7 @@ bool Socket::handle_epoll_event(uint32_t events) {
     return true;
 }
 
+//helper for reading from input steam data
 bool Socket::pump_read() {
 
     char temp[4096];
@@ -144,6 +150,7 @@ bool Socket::pump_read() {
     return true;
 }
 
+//helper for writing to output steam
 bool Socket::pump_write() {
     while (!outbuf_.empty()) {
         ssize_t n = send(fd_, outbuf_.data(), outbuf_.size(), 0);
@@ -163,16 +170,19 @@ bool Socket::pump_write() {
     return true;
 }
 
+//public function used by other layers to write data to the output
 void Socket::write_bytes(const std::vector<uint8_t>& data) {
     outbuf_.insert(outbuf_.end(), data.begin(), data.end());
 
     update_epoll_interest(EPOLLIN | EPOLLOUT);
 }
 
+//public function used by other layers to set callback function for reading input stream data
 void Socket::set_read_callback(void (*cb)(const uint8_t*, size_t)) {
     read_callback_ = cb;
 }
 
+//updates the events that epoll is monitoring
 void Socket::update_epoll_interest(uint32_t new_events) {
     new_events |= EPOLLET;
 
@@ -186,10 +196,12 @@ void Socket::update_epoll_interest(uint32_t new_events) {
     }
 }
 
+//returns current state
 Socket::State Socket::state() {
     return state_;
 }
 
+//closes file descriptor and resets properites of socket object
 void Socket::close() {
     if (fd_ == -1) {
         return;
