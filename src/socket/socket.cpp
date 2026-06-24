@@ -10,13 +10,17 @@
 
 #include <errno.h>
 #include <cstring>
+#include <iostream>
 
-Socket::Socket() {
 
+Socket::Socket(int epoll_fd) : epoll_fd_(epoll_fd) {
+    fd_ = -1;
+    state_ = State::Uninitialised;
+    read_callback_ = nullptr;
 }
 
 Socket::~Socket() {
-
+    close();
 }
 
 bool Socket::create() {
@@ -32,7 +36,6 @@ bool Socket::create() {
     flags |= O_NONBLOCK;
     fcntl(fd_, F_SETFL, flags);
 
-    state_ = State::Created;
     return true;
 }
 
@@ -64,5 +67,141 @@ bool Socket::connect(const std::string& host, uint16_t port) {
 
 bool Socket::register_with_epoll() {
     epoll_event event;
-    event
+    event.data.ptr = this;
+    event.events = EPOLLIN | EPOLLOUT | EPOLLET;
+
+    int result = epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd_, &event);
+
+    if (result == -1) {
+        int err = errno;
+        std::cerr << "epoll_ctl ADD failed: " << strerror(err) << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool Socket::handle_epoll_event(uint32_t events) {
+
+    if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+        //error or connection closed
+        return false;
+    }
+    if (events & EPOLLIN) {
+        if (!pump_read()) {
+            return false;
+        }
+    }
+    if (events & EPOLLOUT) {
+        if (state_ == State::Connecting) {
+            int err = 0;
+            socklen_t len = sizeof(err);
+            getsockopt(fd_, SOL_SOCKET, SO_ERROR, &err, &len);
+
+            if (err == 0) {
+                // success
+                state_ = State::Connected;
+                update_epoll_interest(EPOLLIN);
+            } else {
+                // handshake failed
+                return false;
+            }
+        } 
+        if (state_ == State::Connected) {
+            if (!pump_write()) {
+                return false;
+            }
+        }          
+    }
+    return true;
+}
+
+bool Socket::pump_read() {
+
+    char temp[4096];
+
+    while (true) {
+        ssize_t n = recv(fd_, temp, sizeof(temp), 0);
+
+        if (n > 0) {
+            inbuf_.insert(inbuf_.end(), temp, temp + n);
+            continue;
+        }
+
+        if (n == 0) {
+            return false; //remote closed
+        }
+
+        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+
+        return false;  
+    }
+
+    if (read_callback_) {
+        read_callback_(inbuf_.data(), inbuf_.size());
+        inbuf_.clear();
+    }
+
+    return true;
+}
+
+bool Socket::pump_write() {
+    while (!outbuf_.empty()) {
+        ssize_t n = send(fd_, outbuf_.data(), outbuf_.size(), 0);
+
+        if (n>0) {
+            outbuf_.erase(outbuf_.begin(), outbuf_.begin() + n);
+            continue;
+        }
+
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return true;
+        }
+
+        return false;
+    }
+    update_epoll_interest(EPOLLIN);
+    return true;
+}
+
+void Socket::write_bytes(const std::vector<uint8_t>& data) {
+    outbuf_.insert(outbuf_.end(), data.begin(), data.end());
+
+    update_epoll_interest(EPOLLIN | EPOLLOUT);
+}
+
+void Socket::set_read_callback(void (*cb)(const uint8_t*, size_t)) {
+    read_callback_ = cb;
+}
+
+void Socket::update_epoll_interest(uint32_t new_events) {
+    new_events |= EPOLLET;
+
+    epoll_event event;
+    event.events = new_events;
+    event.data.ptr = this;
+
+    if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd_, &event) == -1) {
+        int err = errno;
+        std::cerr << "epoll_ctl ADD failed: " << strerror(err) << "\n";
+    }
+}
+
+Socket::State Socket::state() {
+    return state_;
+}
+
+void Socket::close() {
+    if (fd_ == -1) {
+        return;
+    }
+
+    epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd_, nullptr);
+
+    ::close(fd_);
+    fd_ = -1;
+
+    inbuf_.clear();
+    outbuf_.clear();
+
+    read_callback_ = nullptr;
 }

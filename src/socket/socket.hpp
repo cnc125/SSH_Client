@@ -9,14 +9,13 @@ class Socket {
 public:
     enum class State {
         Uninitialised,
-        Created,
         Connecting,
         Connected,
         Closing,
         Closed
     };
 
-    Socket();
+    Socket(int epoll_fd);
     ~Socket();
 
     bool create();
@@ -37,9 +36,9 @@ private:
 
     bool register_with_epoll();
 
-    void pump_read();
-    void pump_write();
-    void update_epoll_interest();
+    bool pump_read();
+    bool pump_write();
+    void update_epoll_interest(uint32_t new_events);
 
     void (*read_callback_)(const uint8_t*, size_t);
 
