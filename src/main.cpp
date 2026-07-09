@@ -1,30 +1,44 @@
 #include "socket/socket.hpp"
-#include <sys/epoll.h>
 #include <iostream>
+#include <string>
+#include <vector>
+#include <stdexcept>
+
+// read server version string one byte at a time until newline
+std::string read_version(Socket& sock) {
+    std::string version;
+    uint8_t byte;
+
+    while (true) {
+        sock.read_exact(&byte, 1);
+        if (byte == '\n') break;
+        if (byte != '\r') version += static_cast<char>(byte);
+    }
+    return version;
+}
 
 int main() {
-    int epoll_fd = epoll_create1(0);
+    try {
+        Socket sock("127.0.0.1", 22);
 
-    Socket sock(epoll_fd);
-    sock.create();
-    sock.set_read_callback([](const uint8_t* data, size_t len) {
-        std::cout << "Received " << len << " bytes: ";
-        std::cout.write((const char*)data, len);
-        std::cout << "\n";
-    });
-    sock.connect("127.0.0.1", 9000);
+        std::string server_version = read_version(sock);
+        std::cout << "Server: " << server_version << "\n";
 
-    std::string msg = "hello from socket\n";
-    sock.write_bytes(std::vector<uint8_t>(msg.begin(), msg.end()));
-    epoll_event events[16];
-    while (true) {
-        int n = epoll_wait(epoll_fd, events, 16, -1);
-        for (int i = 0; i < n; i++) {
-            Socket* s = (Socket*)events[i].data.ptr;
-            if (!s->handle_epoll_event(events[i].events)) {
-                std::cout << "Socket closed\n";
-                return 0;
-            }
-        }
+        if (server_version.substr(0, 7) != "SSH-2.0")
+            throw std::runtime_error("Not SSH-2.0: " + server_version);
+
+        std::string client_version = "SSH-2.0-ConorSSH_0.1";
+        std::string line = client_version + "\r\n";
+        std::vector<uint8_t> bytes(line.begin(), line.end());
+        sock.write_exact(bytes.data(), bytes.size());
+
+        std::cout << "Client: " << client_version << "\n";
+        std::cout << "Version exchange complete\n";
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return 1;
     }
+
+    return 0;
 }
