@@ -1,66 +1,37 @@
 #pragma once
 
-#include <string>
-#include <vector>
+#include <string>   
 #include <cstdint>
 
 class Socket {
 
 public:
-    enum class State {
-        Uninitialised,
-        Connecting,
-        Connected,
-        Closing,
-        Closed
-    };
 
     //constructor and deconstructor
-    Socket(int epoll_fd);
+    Socket(const std::string& host, uint16_t port);
     ~Socket();
 
-    //sets up file descriptor and sets to non-blocking returns true if successful
-    bool create();
+    Socket(const Socket&) = delete;
+    Socket& operator=(const Socket&) = delete;
 
-    //connects over TCP using provideded host and port number
-    //registers file descriptor with epoll
-    bool connect(const std::string& host, uint16_t port);
+    //reads len number of bytes from the socket and places them in dst
+    void read_exact(uint8_t* dst, size_t len);
 
-    //function handles epoll events by calling approriate write and read helpers
-    bool handle_epoll_event(uint32_t events);
+    //writes len number of bytes to the sockets from src
+    void write_exact(const uint8_t* src, size_t len);
 
-    //public function used by other layers to write data to the output
-    void write_bytes(const std::vector<uint8_t>& data);
-
-    //public function used by other layers to set callback function for reading input stream data
-    void set_read_callback(void (*cb)(const uint8_t*, size_t));
-    
-    //returns current state
-    State state();
-
-    //closes file descriptor and resets properites of socket object
-    void close();
+    //returns file descriptor for socket
+    int get_fd() const;
 
 private:
     int fd_;
-    int epoll_fd_;
-    State state_;
 
-    std::vector<uint8_t> outbuf_;
-    std::vector<uint8_t> inbuf_;
+    //sets up file descriptor and returns true if successful
+    bool create();
 
-    //registers a file descriptor with epoll
-    bool register_with_epoll();
+    //connects over TCP using provideded host and port number
+    bool connect(const std::string& host, uint16_t port);
 
-    //helper for reading from input steam data
-    bool pump_read();
-
-    //helper for writing to output steam
-    bool pump_write();
-
-    //updates the events that epoll is monitoring
-    void update_epoll_interest(uint32_t new_events);
-
-    void (*read_callback_)(const uint8_t*, size_t);
-
+    //closes file descriptor and resets properites of socket object
+    void close();
 };
