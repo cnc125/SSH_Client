@@ -10,8 +10,12 @@
 #include <string>
 
 
-Socket::Socket() {
+Socket::Socket(const std::string& host, uint16_t port); {
     fd_ = -1;
+
+    if (!create()) throw std::runtime_error("Failed to create socket");
+
+    if (!connect(host, port)) throw std::runtime_error("Failed to connect to " + host);
 }
 
 Socket::~Socket() {
@@ -51,6 +55,7 @@ bool Socket::connect(const std::string& host, uint16_t port) {
     return false;
 }
 
+//reads len number of bytes from the socket and places them in dst
 void Socket::read_exact(uint8_t* dst, size_t len) {
     size_t received = 0;
 
@@ -68,6 +73,7 @@ void Socket::read_exact(uint8_t* dst, size_t len) {
     }
 }
 
+//writes len number of bytes to the sockets from src
 void Socket::write_exact(const uint8_t* src, size_t len) {
     size_t written = 0;
 
@@ -96,6 +102,7 @@ void Socket::close() {
     fd_ = -1;
 }
 
+//returns file descriptor for socket
 int Socket::get_fd() {
     return fd_;
 }
