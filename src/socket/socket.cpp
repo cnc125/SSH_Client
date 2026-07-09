@@ -10,7 +10,7 @@
 #include <string>
 
 
-Socket::Socket(const std::string& host, uint16_t port); {
+Socket::Socket(const std::string& host, uint16_t port) {
     fd_ = -1;
 
     if (!create()) throw std::runtime_error("Failed to create socket");
@@ -38,10 +38,10 @@ bool Socket::create() {
 bool Socket::connect(const std::string& host, uint16_t port) {
     struct addrinfo addr_info;
     addr_info.ai_family = AF_INET; //IPV4
-    addr_info.socktype = SOCK_STREAM //TCP
+    addr_info.ai_socktype = SOCK_STREAM; //TCP
 
     struct addrinfo* res;
-    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0) {
+    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &addr_info, &res) != 0) {
         return false;
     }
 
@@ -103,6 +103,6 @@ void Socket::close() {
 }
 
 //returns file descriptor for socket
-int Socket::get_fd() {
+int Socket::get_fd() const {
     return fd_;
 }
