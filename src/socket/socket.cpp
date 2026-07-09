@@ -32,15 +32,17 @@ bool Socket::create() {
 
 //connects over TCP using provideded host and port number
 bool Socket::connect(const std::string& host, uint16_t port) {
-    sockaddr_in addr;
-    //IPV4 address
-    addr.sin_family = AF_INET;
-    //Sets TCP port in network byte order
-    addr.sin_port = htons(port);
-    //Converts host string intoß binary IPV4 address eg. "192.168.1.10"
-    inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+    struct addrinfo addr_info;
+    addr_info.ai_family = AF_INET; //IPV4
+    addr_info.socktype = SOCK_STREAM //TCP
 
-    int result = ::connect(fd_, (sockaddr *)& addr, sizeof(addr));  
+    struct addrinfo* res;
+    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0) {
+        return false;
+    }
+
+    int result = ::connect(fd_, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
 
     if (result == 0) {
         return true;
