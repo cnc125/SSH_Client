@@ -17,11 +17,8 @@ std::string read_version(Socket& sock) {
     return version;
 }
 
-int main() {
-    try {
-        Socket sock("127.0.0.1", 22);
-
-        std::string server_version = read_version(sock);
+void exchange_identification(Socket &sock) {
+    std::string server_version = read_version(sock);
         std::cout << "Server: " << server_version << "\n";
 
         if (server_version.substr(0, 7) != "SSH-2.0")
@@ -34,6 +31,13 @@ int main() {
 
         std::cout << "Client: " << client_version << "\n";
         std::cout << "Version exchange complete\n";
+}
+
+int main() {
+    try {
+        Socket sock("127.0.0.1", 22);
+        exchange_identification(sock);
+
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
