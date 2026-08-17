@@ -17,6 +17,7 @@ std::string read_version(Socket& sock) {
     return version;
 }
 
+//exchange identification strings with the server
 void exchange_identification(Socket &sock) {
     std::string server_version = read_version(sock);
         std::cout << "Server: " << server_version << "\n";

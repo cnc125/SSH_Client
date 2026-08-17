@@ -1,0 +1,31 @@
+#pragma once
+
+#include <vector>
+#include <array>
+#include <cstdint>
+
+#include "socket/socket.hpp"
+
+class Transport {
+
+public:
+    Transport(Socket& sock);
+
+    void send_packet(const std::vector<uint8_t>& payload);
+
+    std::vector<uint8_t> receive_packet();
+
+private:
+
+    uint32_t decode_packet_length(const std::array<uint8_t, 4>& length_bytes) const;
+    void validate_packet_length(uint32_t packet_length) const;
+    void validate_packet_padding(uint32_t packet_length, uint8_t padding_length) const;
+
+    std::size_t calculate_padding_length(std::size_t payload_size) const;
+    std::array<uint8_t, 4> encode_packet_length(uint32_t packet_length) const;
+    void validate_payload_size(std::size_t payload_size) const;
+    std::vector<uint8_t> generate_padding(std::size_t padding_length) const;
+
+    Socket& sock_;
+
+};
