@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <stdexcept>
+#include <sodium.h>
 
 namespace {
     constexpr uint8_t SSH_MSG_KEXINIT = 20;
@@ -54,6 +55,10 @@ void receive_kexinit(Transport& transport) {
 
 int main() {
     try {
+        int result = sodium_init();
+        if (result == -1) {
+            throw std::runtime_error("Sodium could not be initialised");
+        }
         Socket sock("127.0.0.1", 22);
         exchange_identification(sock);
 

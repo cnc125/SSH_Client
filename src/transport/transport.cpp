@@ -1,6 +1,9 @@
 #include "transport.hpp"
 #include <stdexcept>
 #include <cstddef>
+#include <limits>
+#include <cstdint>
+#include <sodium.h>
 
 namespace {
 
@@ -13,9 +16,7 @@ namespace {
     constexpr std::size_t padding_length_bytes = 1;
 }
 
-Transport::Transport(Socket& sock) : sock_(sock) {
-    incoming_sequence_ = 0;
-    outgoing_sequence_ = 0;
+Transport::Transport(Socket& sock) : sock_(sock), incoming_sequence_(0), outgoing_sequence_(0) {
 }
 
 //this method converts the length from big-endian order to a numerical value
@@ -79,7 +80,75 @@ std::vector<uint8_t> Transport::receive_packet() {
     
     incoming_sequence_++;
     return payload;
+}
 
+//checks the payload is not empty ie contains an SSH Message Number
+void Transport::validate_payload_size(std::size_t payload_size) const {
+    if (payload_size < 1) {
+        throw std::runtime_error("Payload cannot be empty");
+    }
+}
+
+//calculates the amount of padding required for the packet
+std::size_t Transport::calculate_padding_length(std::size_t payload_size) const {
+    size_t base = payload_size + packet_length_bytes + padding_length_bytes;
+    size_t total = min_padding_length + base;
+    size_t remainder = total % block_size;
+    return min_padding_length + (block_size - remainder) % block_size;
+}
+
+//encodes packet length from a number to big endian form
+std::array<uint8_t, Transport::packet_length_bytes> Transport::encode_packet_length(uint32_t packet_length) const {
+    std::array<uint8_t, packet_length_bytes> packet_length_arr;
+    for (size_t i = 0; i<packet_length_bytes; i++) {
+        packet_length_arr[i] = uint8_t(packet_length >> ((packet_length_bytes - 1 - i) * bits_per_byte));
+    }
+    return packet_length_arr;
+}
+
+//generates random padding for sending packets
+std::vector<uint8_t> Transport::generate_padding(std::size_t padding_length) const {
+    std::vector<uint8_t> padding(padding_length);
+    randombytes_buf(padding.data(), padding.size());
+    return padding; 
+}
+
+//handles sending packets
+void Transport::send_packet(const std::vector<uint8_t>& payload) {
+    validate_payload_size(payload.size());
+    size_t padding_length = calculate_padding_length(payload.size());
+    size_t packet_length = padding_length_bytes + payload.size() + padding_length;
+
+    //validate sizes
+    if (packet_length + packet_length_bytes > max_packet_size) {
+        throw std::runtime_error("Packet size exceeds maximum");
+    }
+
+    if (padding_length > std::numeric_limits<uint8_t>::max()) {
+        throw std::runtime_error("Padding size exceeds maximum");
+    }
+
+    if (packet_length > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("Packet length exceeds maximum");
+    }
+
+    std::array<uint8_t, packet_length_bytes> packet_length_arr = encode_packet_length(packet_length);
+    std::vector<uint8_t> padding = generate_padding(padding_length);
+
+    std::vector<uint8_t> packet;
+    packet.reserve(packet_length + packet_length_bytes);
+    packet.insert(packet.end(), packet_length_arr.begin(), packet_length_arr.end());
+    packet.push_back(uint8_t(padding_length));
+    packet.insert(packet.end(), payload.begin(), payload.end());
+    packet.insert(packet.end(), padding.begin(), padding.end());
+
+    if (packet.size() != packet_length + packet_length_bytes) {
+        throw std::runtime_error("Internal: packet constructed incorrectly");
+    }
+
+    sock_.write_exact(packet.data(), packet.size());
+
+    outgoing_sequence_++;
 }
 
 
