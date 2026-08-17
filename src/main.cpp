@@ -1,8 +1,13 @@
 #include "socket/socket.hpp"
+#include "transport/transport.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
 #include <stdexcept>
+
+namespace {
+    constexpr uint8_t SSH_MSG_KEXINIT = 20;
+}
 
 // read server version string one byte at a time until newline
 std::string read_version(Socket& sock) {
@@ -34,10 +39,26 @@ void exchange_identification(Socket &sock) {
         std::cout << "Version exchange complete\n";
 }
 
+//receive SSH_MSG_KEXINIT
+void receive_kexinit(Transport& transport) {
+    std::vector<uint8_t> payload = transport.receive_packet();
+    if (payload.empty()) {
+        throw std::runtime_error("SSH Packet is empty");
+    }
+    if (payload[0] != SSH_MSG_KEXINIT) {
+        throw std::runtime_error("SSH Packet doesn't contain expected KEX information");
+    }
+    std::cout << "Received message 20\n";
+
+}
+
 int main() {
     try {
         Socket sock("127.0.0.1", 22);
         exchange_identification(sock);
+
+        Transport transport(sock);
+        receive_kexinit(transport);
 
 
     } catch (const std::exception& e) {
