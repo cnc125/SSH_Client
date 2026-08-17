@@ -13,7 +13,10 @@ namespace {
     constexpr std::size_t padding_length_bytes = 1;
 }
 
-Transport::Transport(Socket& sock) : sock_(sock) {}
+Transport::Transport(Socket& sock) : sock_(sock) {
+    incoming_sequence_ = 0;
+    outgoing_sequence_ = 0;
+}
 
 //this method converts the length from big-endian order to a numerical value
 uint32_t Transport::decode_packet_length(const std::array<uint8_t, packet_length_bytes>& length_bytes) const {
@@ -73,6 +76,8 @@ std::vector<uint8_t> Transport::receive_packet() {
 
     std::size_t payload_length = packet_length - padding_length_bytes - padding_length;
     std::vector<uint8_t> payload(pbody.begin() + 1, pbody.begin() + 1 + payload_length);
+    
+    incoming_sequence_++;
     return payload;
 
 }

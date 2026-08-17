@@ -29,5 +29,7 @@ private:
     std::vector<uint8_t> generate_padding(std::size_t padding_length) const;
 
     Socket& sock_;
+    uint32_t incoming_sequence_;
+    uint32_t outgoing_sequence_;
 
 };
