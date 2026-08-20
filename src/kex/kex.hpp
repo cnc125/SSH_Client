@@ -55,6 +55,10 @@ public:
     EcdhReply parse_ecdh_reply(const std::vector<uint8_t>& payload) const;
     void calculate_shared_secret(Curve25519State& state, const std::array<uint8_t, 32>& server_public_key) const;
 
+    std::array<uint8_t, 32> calculate_exchange_hash(const std::string& client_identification, const std::string& server_identification,
+    const KexInit& client_kexinit, const KexInit& server_kexinit, const Curve25519State& curve_state,
+    const EcdhReply& ecdh_reply) const;
+
 private:
     static constexpr std::size_t uint32_bytes = 4;
     static constexpr std::size_t cookie_bytes = 16;
@@ -68,5 +72,9 @@ private:
 
     std::string choose_algorithm(const std::string& client_list, const std::string& server_list) const;
     std::vector<uint8_t> read_binary_string(const std::vector<uint8_t>& payload, std::size_t& position) const;
+
+    void append_binary_string(std::vector<uint8_t>& destination, const std::vector<uint8_t>& value) const;
+    void append_binary_string(std::vector<uint8_t>& destination, const std::string& value) const;
+    void append_positive_mpint(std::vector<uint8_t>& destination, const std::array<uint8_t, 32>& value) const;
 };
 

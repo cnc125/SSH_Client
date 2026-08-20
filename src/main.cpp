@@ -11,6 +11,11 @@ namespace {
     constexpr uint8_t SSH_MSG_KEXINIT = 20;
 }
 
+struct IdentificationExchange {
+    std::string client;
+    std::string server;
+};
+
 // read server version string one byte at a time until newline
 std::string read_version(Socket& sock) {
     std::string version;
@@ -25,20 +30,27 @@ std::string read_version(Socket& sock) {
 }
 
 //exchange identification strings with the server
-void exchange_identification(Socket &sock) {
+IdentificationExchange exchange_identification(Socket &sock) {
+
+    IdentificationExchange id_exchange{};
+
     std::string server_version = read_version(sock);
-        std::cout << "Server: " << server_version << "\n";
+    id_exchange.server = server_version;
+    std::cout << "Server: " << server_version << "\n";
 
-        if (server_version.substr(0, 7) != "SSH-2.0")
-            throw std::runtime_error("Not SSH-2.0: " + server_version);
+    if (server_version.substr(0, 7) != "SSH-2.0")
+        throw std::runtime_error("Not SSH-2.0: " + server_version);
 
-        std::string client_version = "SSH-2.0-ConorSSH_0.1";
-        std::string line = client_version + "\r\n";
-        std::vector<uint8_t> bytes(line.begin(), line.end());
-        sock.write_exact(bytes.data(), bytes.size());
+    std::string client_version = "SSH-2.0-ConorSSH_0.1";
+    id_exchange.client = client_version;
+    std::string line = client_version + "\r\n";
+    std::vector<uint8_t> bytes(line.begin(), line.end());
+    sock.write_exact(bytes.data(), bytes.size());
 
-        std::cout << "Client: " << client_version << "\n";
-        std::cout << "Version exchange complete\n";
+    std::cout << "Client: " << client_version << "\n";
+    std::cout << "Version exchange complete\n";
+
+    return id_exchange;
 }
 
 //send SSH_MSG_KEXINIT
@@ -71,7 +83,7 @@ int main() {
             throw std::runtime_error("Sodium could not be initialised");
         }
         Socket sock("127.0.0.1", 22);
-        exchange_identification(sock);
+        IdentificationExchange id = exchange_identification(sock);
 
         Transport transport(sock);
         KexInit client_kexinit = send_kexinit(transport);
@@ -119,6 +131,8 @@ int main() {
         EcdhReply ecdh_reply = kex.parse_ecdh_reply(reply);
         kex.calculate_shared_secret(keypair, ecdh_reply.server_public_key);
         std::cout << "Shared secret calculated successfully\n";
+
+        std::array<uint8_t, 32> exchange_hash = kex.calculate_exchange_hash(id.client, id.server, client_kexinit, server_kexinit, keypair, ecdh_reply);
 
 
     } catch (const std::exception& e) {

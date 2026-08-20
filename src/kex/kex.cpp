@@ -314,3 +314,63 @@ void Kex::calculate_shared_secret(Curve25519State& state, const std::array<uint8
         throw std::runtime_error("Invalid server public key");
     }
 }
+
+void Kex::append_binary_string(std::vector<uint8_t>& destination, const std::vector<uint8_t>& value) const {
+    if (value.size() > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("Length is too long");
+    }
+    //get and add the length
+    auto length = encode_uint32(uint32_t(value.size()));
+    destination.insert(destination.end(), length.begin(), length.end());
+
+    //add remaining bytes
+    destination.insert(destination.end(), value.begin(), value.end());
+
+}
+
+void Kex::append_binary_string(std::vector<uint8_t>& destination, const std::string& value) const {
+    if (value.size() > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("Length is too long");
+    }
+    //get and add the length
+    auto length = encode_uint32(uint32_t(value.size()));
+    destination.insert(destination.end(), length.begin(), length.end());
+
+    //add remaining bytes
+    destination.insert(destination.end(), value.begin(), value.end());
+}
+
+void Kex::append_positive_mpint(std::vector<uint8_t>& destination, const std::array<uint8_t, 32>& value) const {
+    size_t count = 0;
+    while (count < value.size()) {
+        if (value[count] == 0) {
+            count++;
+        } else {
+            break;
+        }
+    }
+    std::vector<uint8_t> magnitude(value.begin() + count, value.end());
+    if (!magnitude.empty() && (magnitude[0] & 0x80) != 0) {
+        magnitude.insert(magnitude.begin(), 0);
+    }
+    append_binary_string(destination, magnitude);
+}
+
+std::array<uint8_t, 32> Kex::calculate_exchange_hash(const std::string& client_identification, const std::string& server_identification, const KexInit& client_kexinit, const KexInit& server_kexinit, const Curve25519State& curve_state, const EcdhReply& ecdh_reply) const {
+    std::vector<uint8_t> destination{};
+    std::vector<uint8_t> client_public_key(curve_state.client_public_key.begin(), curve_state.client_public_key.end());
+    std::vector<uint8_t> server_public_key(ecdh_reply.server_public_key.begin(), ecdh_reply.server_public_key.end());
+    append_binary_string(destination, client_identification);
+    append_binary_string(destination, server_identification);
+    append_binary_string(destination, client_kexinit.raw_payload);
+    append_binary_string(destination, server_kexinit.raw_payload);
+    append_binary_string(destination, ecdh_reply.server_host_key);
+    append_binary_string(destination, client_public_key);
+    append_binary_string(destination, server_public_key);
+    append_positive_mpint(destination, curve_state.shared_secret);
+
+    std::array<uint8_t, 32> exchange_hash{};
+    crypto_hash_sha256(exchange_hash.data(), destination.data(), destination.size());
+    return exchange_hash;
+
+}
