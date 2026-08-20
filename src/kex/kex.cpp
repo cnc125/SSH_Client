@@ -258,3 +258,59 @@ std::vector<uint8_t> Kex::create_ecdh_init_payload(const Curve25519State& state)
     payload.insert(payload.end(), state.client_public_key.begin(), state.client_public_key.end());
     return payload;
 }
+
+std::vector<uint8_t> Kex::read_binary_string(const std::vector<uint8_t>& payload, std::size_t& position) const {
+    if (position > payload.size()) {
+        throw std::runtime_error("Position is outside SSH payload");
+    }
+    if (payload.size() - position < uint32_bytes) {
+        throw std::runtime_error("Expected string length");
+    }
+    std::array<uint8_t, uint32_bytes> length{};
+    std::copy_n(payload.begin() + position, length.size(), length.begin());
+    uint32_t string_length = read_uint32(length);
+    position += uint32_bytes;
+    
+    if (position > payload.size()) {
+        throw std::runtime_error("Position is outside SSH payload");
+    }
+    if (payload.size() - position < string_length) {
+        throw std::runtime_error("Expected string");
+    }
+    std::vector<uint8_t> result(payload.begin() + position, payload.begin() + position + string_length);
+    position += string_length;
+    return result;
+}
+
+EcdhReply Kex::parse_ecdh_reply(const std::vector<uint8_t>& payload) const {
+    EcdhReply result{};
+    if (payload.size() < 1) {
+        throw std::runtime_error("Payload should not be empty");
+    }
+    if (payload[0] != 31) {
+        throw std::runtime_error("SSH_MSG_KEX_ECDH_REPLY packet was expected");
+    }
+
+    size_t position = 1;
+
+    result.server_host_key = read_binary_string(payload, position);
+    std::vector<uint8_t> server_public_key = read_binary_string(payload, position);
+    if (server_public_key.size() != result.server_public_key.size()) {
+        throw std::runtime_error("Curve25519 server public key must be 32 bytes");
+    }
+    std::copy(server_public_key.begin(), server_public_key.end(), result.server_public_key.begin());
+    result.signature = read_binary_string(payload, position);
+
+    if (position != payload.size()) {
+        throw std::runtime_error("No more bytes expected");
+    }
+
+    return result;
+}
+
+void Kex::calculate_shared_secret(Curve25519State& state, const std::array<uint8_t, 32>& server_public_key) const {
+    auto result = crypto_scalarmult_curve25519(state.shared_secret.data(), state.client_private_key.data(), server_public_key.data());
+    if (result == -1) {
+        throw std::runtime_error("Invalid server public key");
+    }
+}

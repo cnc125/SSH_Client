@@ -116,6 +116,9 @@ int main() {
         } else {
             std::cout << "Received SSH_MSG_KEX_ECDH_REPLY\n";
         }
+        EcdhReply ecdh_reply = kex.parse_ecdh_reply(reply);
+        kex.calculate_shared_secret(keypair, ecdh_reply.server_public_key);
+        std::cout << "Shared secret calculated successfully\n";
 
 
     } catch (const std::exception& e) {

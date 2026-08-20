@@ -36,6 +36,13 @@ struct NegotiatedAlgorithms {
 struct Curve25519State {
     std::array<uint8_t, 32> client_private_key;
     std::array<uint8_t, 32> client_public_key;
+    std::array<uint8_t, 32> shared_secret;
+};
+
+struct EcdhReply {
+    std::vector<uint8_t> server_host_key;
+    std::array<uint8_t, 32> server_public_key;
+    std::vector<uint8_t> signature;
 };
 
 class Kex {
@@ -45,6 +52,8 @@ public:
     NegotiatedAlgorithms negotiate(const KexInit& client, const KexInit& server) const;
     Curve25519State create_curve25519_keypair() const;
     std::vector<uint8_t> create_ecdh_init_payload(const Curve25519State& state) const;
+    EcdhReply parse_ecdh_reply(const std::vector<uint8_t>& payload) const;
+    void calculate_shared_secret(Curve25519State& state, const std::array<uint8_t, 32>& server_public_key) const;
 
 private:
     static constexpr std::size_t uint32_bytes = 4;
@@ -58,5 +67,6 @@ private:
     void append_name_list(std::vector<uint8_t>& payload, const std::string& list) const;
 
     std::string choose_algorithm(const std::string& client_list, const std::string& server_list) const;
+    std::vector<uint8_t> read_binary_string(const std::vector<uint8_t>& payload, std::size_t& position) const;
 };
 
