@@ -374,3 +374,81 @@ std::array<uint8_t, 32> Kex::calculate_exchange_hash(const std::string& client_i
     return exchange_hash;
 
 }
+
+Ed25519VerificationData Kex::parse_ed25519_verification_data(const EcdhReply& reply, const std::string& negotiated_host_key_algorithm) const{
+    std::size_t position = 0;
+    Ed25519VerificationData ed25519_data{};
+    std::vector<uint8_t> algorithm = read_binary_string(reply.server_host_key, position);
+    std::string algorithm_name(algorithm.begin(), algorithm.end());
+    if (algorithm_name != negotiated_host_key_algorithm || algorithm_name != "ssh-ed25519"){
+        throw std::runtime_error("Algorithm is not the negotiated ssh-ed25519.");
+    }
+    
+    std::vector<uint8_t> public_key = read_binary_string(reply.server_host_key, position);
+    if (public_key.size() != ed25519_data.public_key.size()) {
+        throw std::runtime_error("Ed25519 public key must be 32 bytes");
+    }
+    std::copy(public_key.begin(), public_key.end(), ed25519_data.public_key.begin());
+
+    if (position != reply.server_host_key.size()) {
+        throw std::runtime_error("Unexpected bytes in Ed25519 host key");
+    }
+
+    position = 0;
+
+    std::vector<uint8_t> algorithm_sig = read_binary_string(reply.signature, position);
+    std::string algorithm_sig_name(algorithm_sig.begin(), algorithm_sig.end());
+    if (algorithm_name != negotiated_host_key_algorithm || algorithm_sig_name != "ssh-ed25519"){
+        throw std::runtime_error("Algorithm is not the negotiated ssh-ed25519.");
+    }
+    
+    std::vector<uint8_t> signature_bytes = read_binary_string(reply.signature, position);
+    if (signature_bytes.size() != ed25519_data.signature.size()) {
+        throw std::runtime_error("Ed25519 signature must be 64 bytes");
+    }
+    std::copy(signature_bytes.begin(), signature_bytes.end(), ed25519_data.signature.begin());
+
+    if (position != reply.signature.size()) {
+        throw std::runtime_error("Unexpected bytes in Ed25519 signature");
+    }
+
+    return ed25519_data;
+
+}
+
+void Kex::verify_ed25519_signature(const Ed25519VerificationData& data, const std::array<uint8_t, 32>& exchange_hash) const {
+    int result = crypto_sign_verify_detached(data.signature.data(), exchange_hash.data(), exchange_hash.size(), data.public_key.data());
+    if (result != 0) {
+        throw std::runtime_error("Server Ed25519 signature verification failed");
+    }
+}
+
+std::array<uint8_t, 32> Kex::calculate_host_key_fingerprint(const std::vector<uint8_t>& server_host_key) const {
+    std::array<uint8_t, 32> fingerprint{};
+    crypto_hash_sha256(fingerprint.data(), server_host_key.data(), server_host_key.size());
+    return fingerprint;
+}
+
+std::array<uint8_t, 32> Kex::derive_key_material(const std::array<uint8_t, 32>& shared_secret, const std::array<uint8_t, 32>& exchange_hash, uint8_t letter, const std::array<uint8_t, 32>& session_id) const {
+    std::vector<uint8_t> input{};
+    append_positive_mpint(input, shared_secret);
+    input.insert(input.end(), exchange_hash.begin(), exchange_hash.end());
+    input.push_back(letter);
+    input.insert(input.end(), session_id.begin(), session_id.end());
+    std::array<uint8_t, 32> result{};
+    crypto_hash_sha256(result.data(), input.data(), input.size());
+    return result;
+}
+
+TransportKeyMaterial Kex::derive_transport_keys(const std::array<uint8_t, 32>& shared_secret, const std::array<uint8_t, 32>& exchange_hash, const std::array<uint8_t, 32>& session_id) const {
+    TransportKeyMaterial transport_keys{};
+    std::array<uint8_t, 32> key1 = derive_key_material(shared_secret, exchange_hash, 'A', session_id);
+    std::array<uint8_t, 32> key2 = derive_key_material(shared_secret, exchange_hash, 'B', session_id);
+    std::copy_n(key1.begin(), transport_keys.iv_cs.size(), transport_keys.iv_cs.begin());
+    std::copy_n(key2.begin(), transport_keys.iv_sc.size(), transport_keys.iv_sc.begin());
+    transport_keys.encryption_key_cs = derive_key_material(shared_secret, exchange_hash, 'C', session_id);
+    transport_keys.encryption_key_sc = derive_key_material(shared_secret, exchange_hash, 'D', session_id);
+    transport_keys.mac_key_cs = derive_key_material(shared_secret, exchange_hash, 'E', session_id);
+    transport_keys.mac_key_sc = derive_key_material(shared_secret, exchange_hash, 'F', session_id);
+    return transport_keys;
+}

@@ -16,6 +16,13 @@ struct IdentificationExchange {
     std::string server;
 };
 
+std::string format_sha256_fingerprint(const std::array<uint8_t, 32>& fingerprint) {
+    std::size_t encoded_size = sodium_base64_ENCODED_LEN(fingerprint.size(), sodium_base64_VARIANT_ORIGINAL_NO_PADDING);
+    std::vector<char> encoded(encoded_size);
+    sodium_bin2base64(encoded.data(), encoded.size(), fingerprint.data(), fingerprint.size(), sodium_base64_VARIANT_ORIGINAL_NO_PADDING);
+    return "SHA256: " + std::string(encoded.data());
+}
+
 // read server version string one byte at a time until newline
 std::string read_version(Socket& sock) {
     std::string version;
@@ -133,6 +140,27 @@ int main() {
         std::cout << "Shared secret calculated successfully\n";
 
         std::array<uint8_t, 32> exchange_hash = kex.calculate_exchange_hash(id.client, id.server, client_kexinit, server_kexinit, keypair, ecdh_reply);
+
+        Ed25519VerificationData verification_data = kex.parse_ed25519_verification_data(ecdh_reply, algorithms.host_key_algorithm);
+
+        kex.verify_ed25519_signature(verification_data, exchange_hash);
+        std::array<uint8_t, 32> fingerprint = kex.calculate_host_key_fingerprint(ecdh_reply.server_host_key);
+
+        std::string fingerprint_text = format_sha256_fingerprint(fingerprint);
+        std::cout << "Server host key finger print: " << fingerprint_text << '\n';
+
+        std::string answer;
+
+        std::cout << "Do you trust this host key? [yes/no]: ";
+        std::getline(std::cin, answer);
+
+        if (answer != "yes") {
+            throw std::runtime_error("Host key was not trusted"); 
+        }
+
+        std::array<uint8_t, 32> session_id = exchange_hash;
+
+        TransportKeyMaterial transport_keys = kex.derive_transport_keys(keypair.shared_secret, exchange_hash, session_id);
 
 
     } catch (const std::exception& e) {

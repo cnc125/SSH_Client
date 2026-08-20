@@ -45,6 +45,22 @@ struct EcdhReply {
     std::vector<uint8_t> signature;
 };
 
+struct Ed25519VerificationData {
+    std::array<uint8_t, 32> public_key;
+    std::array<uint8_t, 64> signature;
+};
+
+struct TransportKeyMaterial {
+    std::array<uint8_t, 16> iv_cs;
+    std::array<uint8_t, 16> iv_sc;
+    
+    std::array<uint8_t, 32> encryption_key_cs;
+    std::array<uint8_t, 32> encryption_key_sc;
+
+    std::array<uint8_t, 32> mac_key_cs;
+    std::array<uint8_t, 32> mac_key_sc;
+};
+
 class Kex {
 public:
     KexInit parse_kexinit(const std::vector<uint8_t>& payload);
@@ -58,6 +74,12 @@ public:
     std::array<uint8_t, 32> calculate_exchange_hash(const std::string& client_identification, const std::string& server_identification,
     const KexInit& client_kexinit, const KexInit& server_kexinit, const Curve25519State& curve_state,
     const EcdhReply& ecdh_reply) const;
+
+    Ed25519VerificationData parse_ed25519_verification_data(const EcdhReply& reply, const std::string& negotiated_host_key_algorithm) const;
+    void verify_ed25519_signature(const Ed25519VerificationData& data, const std::array<uint8_t, 32>& exchange_hash) const;
+
+    std::array<uint8_t, 32> calculate_host_key_fingerprint(const std::vector<uint8_t>& server_host_key) const;
+    TransportKeyMaterial derive_transport_keys(const std::array<uint8_t, 32>& shared_secret, const std::array<uint8_t, 32>& exchange_hash, const std::array<uint8_t, 32>& session_id) const;
 
 private:
     static constexpr std::size_t uint32_bytes = 4;
@@ -76,5 +98,7 @@ private:
     void append_binary_string(std::vector<uint8_t>& destination, const std::vector<uint8_t>& value) const;
     void append_binary_string(std::vector<uint8_t>& destination, const std::string& value) const;
     void append_positive_mpint(std::vector<uint8_t>& destination, const std::array<uint8_t, 32>& value) const;
+
+    std::array<uint8_t, 32> derive_key_material(const std::array<uint8_t, 32>& shared_secret, const std::array<uint8_t, 32>& exchange_hash, uint8_t letter, const std::array<uint8_t, 32>& session_id) const;
 };
 
