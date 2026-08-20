@@ -3,6 +3,8 @@
 #include <vector>
 #include <cstdint>
 #include <array>
+#include <string>
+#include <cstddef>
 
 class Kex {
 public:
@@ -12,4 +14,8 @@ private:
     static constexpr std::size_t uint32_bytes = 4;
 
     uint32_t read_uint32(const std::array<uint8_t, uint32_bytes>& length_bytes) const;
+
+    std::string read_name_list(const std::vector<uint8_t>& payload, std::size_t& position) const;
+
+    bool parse_boolean(const std::vector<uint8_t>& payload, std::size_t& position) const;
 };
