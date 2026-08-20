@@ -36,11 +36,11 @@ bool Socket::create() {
 
 //connects over TCP using provideded host and port number
 bool Socket::connect(const std::string& host, uint16_t port) {
-    struct addrinfo addr_info;
+    struct addrinfo addr_info{};
     addr_info.ai_family = AF_INET; //IPV4
     addr_info.ai_socktype = SOCK_STREAM; //TCP
 
-    struct addrinfo* res;
+    struct addrinfo* res = nullptr;
     if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &addr_info, &res) != 0) {
         return false;
     }

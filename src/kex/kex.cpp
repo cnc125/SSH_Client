@@ -46,7 +46,7 @@ void Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
     position += list_length;
     std::cout << "KEXINIT\n";
     std::cout << "List Length: " << list_length << "\n";
-    std::cout << "List contents: " << list_text;
+    std::cout << "List contents: " << list_text << "\n";
 }
 
 uint32_t Kex::read_uint32(const std::array<uint8_t, uint32_bytes>& length_bytes) const {

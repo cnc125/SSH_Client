@@ -1,5 +1,6 @@
 #include "socket/socket.hpp"
 #include "transport/transport.hpp"
+#include "kex/kex.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -50,7 +51,8 @@ void receive_kexinit(Transport& transport) {
         throw std::runtime_error("SSH Packet doesn't contain expected KEX information");
     }
     std::cout << "Received message 20\n";
-
+    Kex kex;
+    kex.parse_kexinit(payload);
 }
 
 int main() {
