@@ -7,11 +7,11 @@
 #include <iostream>
 
 namespace {
-    constexpr std::size_t cookie_bytes = 16;
     constexpr std::size_t bits_per_byte = 8;
 }
 
-void Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
+KexInit Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
+    KexInit result{};
     if (payload.size() < 1) {
         throw std::runtime_error("Payload should not be empty");
     }
@@ -25,10 +25,13 @@ void Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
         throw std::runtime_error("Payload should contain a cookie");
     }
 
+    result.raw_payload = payload;
+
     //obtain cookie bytes
     std::array<uint8_t, cookie_bytes> cookie{};
     std::copy_n(payload.begin() + position, cookie.size(), cookie.begin());
     position += cookie_bytes;
+    result.cookie = cookie;
 
     //get lists
     std::string kex_algorithms = read_name_list(payload, position);
@@ -74,6 +77,20 @@ void Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
     if (payload.size() != position) {
         throw std::runtime_error("Additional bytes not expected");
     }
+
+    result.kex_algorithms = kex_algorithms;
+    result.host_key_algorithms = host_key_algorithms;
+    result.encryption_cs_algorithms = encryption_cs_algorithms;
+    result.encryption_sc_algorithms = encryption_sc_algorithms;
+    result.mac_cs_algorithms = mac_cs_algorithms;
+    result.mac_sc_algorithms = mac_sc_algorithms;
+    result.compression_cs_algorithms = compression_cs_algorithms;
+    result.compression_sc_algorithms = compression_sc_algorithms;
+    result.languages_cs = languages_cs;
+    result.languages_sc = languages_sc;
+    result.first_kex_packet_follows = first_kex_packet_follows;
+
+    return result;
 
 }
 

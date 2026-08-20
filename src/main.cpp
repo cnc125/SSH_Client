@@ -52,7 +52,7 @@ void receive_kexinit(Transport& transport) {
     }
     std::cout << "Received message 20\n";
     Kex kex;
-    kex.parse_kexinit(payload);
+    KexInit server_kexinit = kex.parse_kexinit(payload);
 }
 
 int main() {
