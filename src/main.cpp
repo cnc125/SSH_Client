@@ -41,8 +41,16 @@ void exchange_identification(Socket &sock) {
         std::cout << "Version exchange complete\n";
 }
 
+//send SSH_MSG_KEXINIT
+KexInit send_kexinit(Transport& transport) {
+    Kex kex;
+    KexInit payload = kex.create_client_kexinit();
+    transport.send_packet(payload.raw_payload);
+    return payload;
+}
+
 //receive SSH_MSG_KEXINIT
-void receive_kexinit(Transport& transport) {
+KexInit receive_kexinit(Transport& transport) {
     std::vector<uint8_t> payload = transport.receive_packet();
     if (payload.empty()) {
         throw std::runtime_error("SSH Packet is empty");
@@ -53,6 +61,7 @@ void receive_kexinit(Transport& transport) {
     std::cout << "Received message 20\n";
     Kex kex;
     KexInit server_kexinit = kex.parse_kexinit(payload);
+    return server_kexinit;
 }
 
 int main() {
@@ -65,7 +74,48 @@ int main() {
         exchange_identification(sock);
 
         Transport transport(sock);
-        receive_kexinit(transport);
+        KexInit client_kexinit = send_kexinit(transport);
+        KexInit server_kexinit = receive_kexinit(transport);
+
+        Kex kex;
+        NegotiatedAlgorithms algorithms = kex.negotiate(client_kexinit, server_kexinit);
+
+        std::cout << "Negotiated algorithms:\n";
+        std::cout << "KEX: " << algorithms.kex_algorithm << '\n';
+        std::cout << "Host key: " << algorithms.host_key_algorithm << '\n';
+        std::cout << "Encryption client -> server: "
+          << algorithms.encryption_cs_algorithm << '\n';
+        std::cout << "Encryption server -> client: "
+          << algorithms.encryption_sc_algorithm << '\n';
+        std::cout << "MAC client -> server: "
+          << algorithms.mac_cs_algorithm << '\n';
+        std::cout << "MAC server -> client: "
+          << algorithms.mac_sc_algorithm << '\n';
+        std::cout << "Compression client -> server: "
+          << algorithms.compression_cs_algorithm << '\n';
+        std::cout << "Compression server -> client: "
+          << algorithms.compression_sc_algorithm << '\n';
+
+        Curve25519State keypair;
+        if (algorithms.kex_algorithm == "curve25519-sha256") {
+            keypair = kex.create_curve25519_keypair();
+        } else {
+            throw std::runtime_error("Negotiated algorithm not implemented");
+        }
+        std::vector<uint8_t> ecdh_init = kex.create_ecdh_init_payload(keypair);
+        transport.send_packet(ecdh_init);
+
+        std::cout << "Sent SSH_MSG_KEX_ECDH_INIT\n";
+
+        auto reply = transport.receive_packet();
+        if (reply.empty()) {
+            throw std::runtime_error("Empty SSH reply");
+        }
+        if (reply[0] != 31) {
+            throw std::runtime_error("Expected an SSH_MSG_KEX_ECDH_REPLY");
+        } else {
+            std::cout << "Received SSH_MSG_KEX_ECDH_REPLY\n";
+        }
 
 
     } catch (const std::exception& e) {

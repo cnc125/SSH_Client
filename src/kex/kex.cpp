@@ -5,9 +5,14 @@
 #include <algorithm>
 #include <string>
 #include <iostream>
+#include <sodium.h>
+#include <limits>
+#include <sstream>
 
 namespace {
     constexpr std::size_t bits_per_byte = 8;
+    constexpr std::size_t length_of_key = 32;
+    constexpr std::size_t SSH_MSG_KEX_ECDH_INIT = 30;
 }
 
 KexInit Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
@@ -133,4 +138,123 @@ bool Kex::parse_boolean(const std::vector<uint8_t>& payload, std::size_t& positi
     bool result = payload[position] != 0;
     position++;
     return result;
+}
+
+KexInit Kex::create_client_kexinit() {
+    KexInit result{};
+    std::array<uint8_t, cookie_bytes> cookie{};
+    randombytes_buf(cookie.data(), cookie.size());
+    result.cookie = cookie;
+    result.kex_algorithms = "curve25519-sha256";
+    result.host_key_algorithms = "ssh-ed25519";
+    result.encryption_cs_algorithms = "aes256-ctr";
+    result.encryption_sc_algorithms = "aes256-ctr";
+    result.mac_cs_algorithms = "hmac-sha2-256";
+    result.mac_sc_algorithms = "hmac-sha2-256";
+    result.compression_cs_algorithms = "none";
+    result.compression_sc_algorithms = "none";
+    result.languages_cs = "";
+    result.languages_sc = "";
+    result.first_kex_packet_follows = false;
+
+    std::vector<uint8_t>& raw_payload = result.raw_payload;
+    raw_payload.push_back(20);
+    raw_payload.insert(raw_payload.end(), cookie.begin(), cookie.end());
+    append_name_list(raw_payload, result.kex_algorithms);
+    append_name_list(raw_payload, result.host_key_algorithms);
+    append_name_list(raw_payload, result.encryption_cs_algorithms);
+    append_name_list(raw_payload, result.encryption_sc_algorithms);
+    append_name_list(raw_payload, result.mac_cs_algorithms);
+    append_name_list(raw_payload, result.mac_sc_algorithms);
+    append_name_list(raw_payload, result.compression_cs_algorithms);
+    append_name_list(raw_payload, result.compression_sc_algorithms);
+    append_name_list(raw_payload, result.languages_cs);
+    append_name_list(raw_payload, result.languages_sc);
+    raw_payload.push_back(result.first_kex_packet_follows);
+    auto reserved = encode_uint32(0);
+    raw_payload.insert(raw_payload.end(), reserved.begin(), reserved.end());
+    return result;
+}
+
+std::array<uint8_t, Kex::uint32_bytes> Kex::encode_uint32(uint32_t length) const {
+    std::array<uint8_t, uint32_bytes> encoded;
+    for (size_t i = 0; i<uint32_bytes; i++) {
+        encoded[i] = uint8_t(length >> ((uint32_bytes - 1 - i) * bits_per_byte));
+    }
+    return encoded;
+}
+
+void Kex::append_name_list(std::vector<uint8_t>& payload, const std::string& list) const {
+    if (list.size() > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("Length doesn't bit into 32 bits");
+    }
+    uint32_t length = uint32_t(list.size());
+    std::array<uint8_t, Kex::uint32_bytes> length_array = encode_uint32(length);
+
+    //add the length
+    payload.insert(payload.end(), length_array.begin(), length_array.end());
+    //add the algorithms
+    payload.insert(payload.end(), list.begin(), list.end());
+}
+
+std::string Kex::choose_algorithm(const std::string& client_list, const std::string& server_list) const{
+    //first split by commas
+    std::stringstream cs(client_list);
+    std::string item;
+    std::vector<std::string> client;
+
+    while (std::getline(cs, item, ',')) {
+        client.push_back(item);
+    }
+
+    std::stringstream ss(server_list);
+    std::vector<std::string> server;
+
+    while (std::getline(ss, item, ',')) {
+        server.push_back(item);
+    }
+
+    for (const auto& c : client) {
+        for (const auto& s : server) {
+            if (c == s) {
+                return c;
+            }
+        }
+    }
+    throw std::runtime_error("No mutually supported SSH algorithm");
+}
+
+NegotiatedAlgorithms Kex::negotiate(const KexInit& client, const KexInit& server) const {
+    NegotiatedAlgorithms algorithms;
+    algorithms.kex_algorithm = choose_algorithm(client.kex_algorithms, server.kex_algorithms);
+    algorithms.host_key_algorithm = choose_algorithm(client.host_key_algorithms, server.host_key_algorithms);
+    algorithms.encryption_cs_algorithm = choose_algorithm(client.encryption_cs_algorithms, server.encryption_cs_algorithms);
+    algorithms.encryption_sc_algorithm = choose_algorithm(client.encryption_sc_algorithms, server.encryption_sc_algorithms);
+    algorithms.mac_cs_algorithm = choose_algorithm(client.mac_cs_algorithms, server.mac_cs_algorithms);
+    algorithms.mac_sc_algorithm = choose_algorithm(client.mac_sc_algorithms, server.mac_sc_algorithms);
+    algorithms.compression_cs_algorithm = choose_algorithm(client.compression_cs_algorithms, server.compression_cs_algorithms);
+    algorithms.compression_sc_algorithm = choose_algorithm(client.compression_sc_algorithms, server.compression_sc_algorithms);
+    return algorithms;
+}
+
+Curve25519State Kex::create_curve25519_keypair() const {
+    Curve25519State state{};
+
+    randombytes_buf(state.client_private_key.data(), state.client_private_key.size());
+
+    const auto result = crypto_scalarmult_curve25519_base(state.client_public_key.data(), state.client_private_key.data());
+    if (result != 0) {
+        throw std::runtime_error("Curve25519 algorithm failed to generate keys");
+    }
+
+    return state;
+}
+
+std::vector<uint8_t> Kex::create_ecdh_init_payload(const Curve25519State& state) const {
+    std::vector<uint8_t> payload{};
+    payload.push_back(SSH_MSG_KEX_ECDH_INIT); 
+    const auto length = encode_uint32(uint32_t(length_of_key));
+    payload.insert(payload.end(), length.begin(), length.end());
+    payload.insert(payload.end(), state.client_public_key.begin(), state.client_public_key.end());
+    return payload;
 }
