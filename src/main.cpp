@@ -9,6 +9,7 @@
 
 namespace {
     constexpr uint8_t SSH_MSG_KEXINIT = 20;
+    constexpr uint8_t SSH_MSG_NEWKEYS = 21;
 }
 
 struct IdentificationExchange {
@@ -20,7 +21,7 @@ std::string format_sha256_fingerprint(const std::array<uint8_t, 32>& fingerprint
     std::size_t encoded_size = sodium_base64_ENCODED_LEN(fingerprint.size(), sodium_base64_VARIANT_ORIGINAL_NO_PADDING);
     std::vector<char> encoded(encoded_size);
     sodium_bin2base64(encoded.data(), encoded.size(), fingerprint.data(), fingerprint.size(), sodium_base64_VARIANT_ORIGINAL_NO_PADDING);
-    return "SHA256: " + std::string(encoded.data());
+    return "SHA256:" + std::string(encoded.data());
 }
 
 // read server version string one byte at a time until newline
@@ -147,7 +148,7 @@ int main() {
         std::array<uint8_t, 32> fingerprint = kex.calculate_host_key_fingerprint(ecdh_reply.server_host_key);
 
         std::string fingerprint_text = format_sha256_fingerprint(fingerprint);
-        std::cout << "Server host key finger print: " << fingerprint_text << '\n';
+        std::cout << "Server host key fingerprint: " << fingerprint_text << '\n';
 
         std::string answer;
 
@@ -162,6 +163,20 @@ int main() {
 
         TransportKeyMaterial transport_keys = kex.derive_transport_keys(keypair.shared_secret, exchange_hash, session_id);
 
+        //send NEWKEYS
+        std::vector<uint8_t> payload_newkeys{};
+        payload_newkeys.push_back(SSH_MSG_NEWKEYS);
+        transport.send_packet(payload_newkeys);
+
+        //get server NEWKEYS response
+        std::vector<uint8_t> server_newkeys = transport.receive_packet();
+        if (server_newkeys.size() != 1) {
+            throw std::runtime_error("Expected a packet of length 1 byte");
+        }
+        if (server_newkeys[0] != SSH_MSG_NEWKEYS) {
+            throw std::runtime_error("Expected a SSH_MSG_NEWKEYS packet");
+        }
+        std::cout << "NEWKEYS exchange completed" << "\n";
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
