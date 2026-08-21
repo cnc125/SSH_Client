@@ -80,7 +80,6 @@ public:
 
     std::array<uint8_t, 32> calculate_host_key_fingerprint(const std::vector<uint8_t>& server_host_key) const;
     TransportKeyMaterial derive_transport_keys(const std::array<uint8_t, 32>& shared_secret, const std::array<uint8_t, 32>& exchange_hash, const std::array<uint8_t, 32>& session_id) const;
-
 private:
     static constexpr std::size_t uint32_bytes = 4;
     static constexpr std::size_t cookie_bytes = 16;
@@ -100,5 +99,6 @@ private:
     void append_positive_mpint(std::vector<uint8_t>& destination, const std::array<uint8_t, 32>& value) const;
 
     std::array<uint8_t, 32> derive_key_material(const std::array<uint8_t, 32>& shared_secret, const std::array<uint8_t, 32>& exchange_hash, uint8_t letter, const std::array<uint8_t, 32>& session_id) const;
+
 };
 

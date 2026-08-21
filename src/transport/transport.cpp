@@ -16,7 +16,12 @@ namespace {
     constexpr std::size_t padding_length_bytes = 1;
 }
 
-Transport::Transport(Socket& sock) : sock_(sock), incoming_sequence_(0), outgoing_sequence_(0) {
+Transport::Transport(Socket& sock) : sock_(sock), incoming_sequence_(0), outgoing_sequence_(0), outgoing_encryption_active_(false), incoming_encryption_active_(false), outgoing_cipher_(nullptr), incoming_cipher_(nullptr) {
+}
+
+Transport::~Transport() {
+    EVP_CIPHER_CTX_free(outgoing_cipher_);
+    EVP_CIPHER_CTX_free(incoming_cipher_);
 }
 
 //this method converts the length from big-endian order to a numerical value
@@ -149,6 +154,38 @@ void Transport::send_packet(const std::vector<uint8_t>& payload) {
     sock_.write_exact(packet.data(), packet.size());
 
     outgoing_sequence_++;
+}
+
+void Transport::enable_outgoing_encryption(const std::array<uint8_t, 16>& iv, const std::array<uint8_t, 32>& encryption_key, const std::array<uint8_t, 32>& mac_key) {
+    EVP_CIPHER_CTX* new_context = EVP_CIPHER_CTX_new();
+    if (new_context == nullptr) {
+        throw std::runtime_error("Failed to create temporary cipher context");
+    }
+    bool r = EVP_EncryptInit_ex(new_context, EVP_aes_256_ctr(), nullptr, encryption_key.data(), iv.data());
+    if (r != 1) {
+        EVP_CIPHER_CTX_free(new_context);
+        throw std::runtime_error("Failed to initialise encryption");
+    }
+    EVP_CIPHER_CTX_free(outgoing_cipher_);
+    outgoing_cipher_ = new_context;
+    outgoing_mac_key_ = mac_key;
+    outgoing_encryption_active_ = true;
+}
+
+void Transport::enable_incoming_encryption(const std::array<uint8_t, 16>& iv, const std::array<uint8_t, 32>& encryption_key, const std::array<uint8_t, 32>& mac_key) {
+    EVP_CIPHER_CTX* new_context = EVP_CIPHER_CTX_new();
+    if (new_context == nullptr) {
+        throw std::runtime_error("Failed to create temporary cipher context");
+    }
+    bool r = EVP_DecryptInit_ex(new_context, EVP_aes_256_ctr(), nullptr, encryption_key.data(), iv.data());
+    if (r != 1) {
+        EVP_CIPHER_CTX_free(new_context);
+        throw std::runtime_error("Failed to initialise encryption");
+    }
+    EVP_CIPHER_CTX_free(incoming_cipher_);
+    incoming_cipher_ = new_context;
+    incoming_mac_key_ = mac_key;
+    incoming_encryption_active_ = true;
 }
 
 

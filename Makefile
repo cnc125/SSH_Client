@@ -1,6 +1,6 @@
 CXX      = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -g -I src
-LDFLAGS  = -lsodium
+LDFLAGS  = -lsodium -lcrypto
 
 TARGET   = bin/ssh
 

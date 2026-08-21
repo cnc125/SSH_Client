@@ -167,6 +167,7 @@ int main() {
         std::vector<uint8_t> payload_newkeys{};
         payload_newkeys.push_back(SSH_MSG_NEWKEYS);
         transport.send_packet(payload_newkeys);
+        transport.enable_outgoing_encryption(transport_keys.iv_cs, transport_keys.encryption_key_cs, transport_keys.mac_key_cs);
 
         //get server NEWKEYS response
         std::vector<uint8_t> server_newkeys = transport.receive_packet();
@@ -177,6 +178,7 @@ int main() {
             throw std::runtime_error("Expected a SSH_MSG_NEWKEYS packet");
         }
         std::cout << "NEWKEYS exchange completed" << "\n";
+        transport.enable_incoming_encryption(transport_keys.iv_sc, transport_keys.encryption_key_sc, transport_keys.mac_key_sc);
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";

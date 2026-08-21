@@ -3,6 +3,7 @@
 #include <vector>
 #include <array>
 #include <cstdint>
+#include <openssl/evp.h>
 
 #include "socket/socket.hpp"
 
@@ -10,10 +11,18 @@ class Transport {
 
 public:
     Transport(Socket& sock);
+    ~Transport();
+
+    //prevent accidental copying - due to OpenSSL pointers
+    Transport(const Transport&) = delete;
+    Transport& operator=(const Transport&) = delete;
 
     void send_packet(const std::vector<uint8_t>& payload);
 
     std::vector<uint8_t> receive_packet();
+
+    void enable_outgoing_encryption(const std::array<uint8_t, 16>& iv, const std::array<uint8_t, 32>& encryption_key, const std::array<uint8_t, 32>& mac_key);
+    void enable_incoming_encryption(const std::array<uint8_t, 16>& iv, const std::array<uint8_t, 32>& encryption_key, const std::array<uint8_t, 32>& mac_key);
 
 private:
 
@@ -31,5 +40,14 @@ private:
     Socket& sock_;
     uint32_t incoming_sequence_;
     uint32_t outgoing_sequence_;
+
+    bool outgoing_encryption_active_;
+    bool incoming_encryption_active_;
+
+    EVP_CIPHER_CTX* outgoing_cipher_;
+    EVP_CIPHER_CTX* incoming_cipher_;
+
+    std::array<uint8_t, 32> outgoing_mac_key_;
+    std::array<uint8_t, 32> incoming_mac_key_;  
 
 };
