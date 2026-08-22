@@ -1,4 +1,5 @@
 #include "kex.hpp"
+#include "common/ssh_encoding.hpp"
 #include <stdexcept>
 #include <cstddef>
 #include <array>
@@ -72,7 +73,7 @@ KexInit Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
     }
     std::array<uint8_t, uint32_bytes> reserved{};
     std::copy_n(payload.begin() + position, reserved.size(), reserved.begin());
-    uint32_t reserved_value = read_uint32(reserved);
+    uint32_t reserved_value = ssh_encoding::decode_uint32(reserved);
     position += uint32_bytes;
     if (reserved_value != 0) {
         throw std::runtime_error("Reserved bytes expected to be equal to 0");
@@ -99,14 +100,6 @@ KexInit Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
 
 }
 
-uint32_t Kex::read_uint32(const std::array<uint8_t, uint32_bytes>& length_bytes) const {
-    uint32_t acc = 0;
-    for (uint8_t byte : length_bytes) {
-        acc = (acc << bits_per_byte) | uint32_t(byte);
-    }
-    return acc;
-}
-
 std::string Kex::read_name_list(const std::vector<uint8_t>& payload, std::size_t& position) const {
     if (position > payload.size()) {
         throw std::runtime_error("SSH Payload missing expected bytes");
@@ -116,7 +109,7 @@ std::string Kex::read_name_list(const std::vector<uint8_t>& payload, std::size_t
     }
     std::array<uint8_t, uint32_bytes> length{};
     std::copy_n(payload.begin() + position, length.size(), length.begin());
-    uint32_t list_length = read_uint32(length);
+    uint32_t list_length = ssh_encoding::decode_uint32(length);
     position += uint32_bytes;
     
     if (payload.size() - position < list_length) {
@@ -171,17 +164,9 @@ KexInit Kex::create_client_kexinit() {
     append_name_list(raw_payload, result.languages_cs);
     append_name_list(raw_payload, result.languages_sc);
     raw_payload.push_back(result.first_kex_packet_follows);
-    auto reserved = encode_uint32(0);
+    auto reserved = ssh_encoding::encode_uint32(0);
     raw_payload.insert(raw_payload.end(), reserved.begin(), reserved.end());
     return result;
-}
-
-std::array<uint8_t, Kex::uint32_bytes> Kex::encode_uint32(uint32_t length) const {
-    std::array<uint8_t, uint32_bytes> encoded;
-    for (size_t i = 0; i<uint32_bytes; i++) {
-        encoded[i] = uint8_t(length >> ((uint32_bytes - 1 - i) * bits_per_byte));
-    }
-    return encoded;
 }
 
 void Kex::append_name_list(std::vector<uint8_t>& payload, const std::string& list) const {
@@ -189,7 +174,7 @@ void Kex::append_name_list(std::vector<uint8_t>& payload, const std::string& lis
         throw std::runtime_error("Length doesn't bit into 32 bits");
     }
     uint32_t length = uint32_t(list.size());
-    std::array<uint8_t, Kex::uint32_bytes> length_array = encode_uint32(length);
+    std::array<uint8_t, Kex::uint32_bytes> length_array = ssh_encoding::encode_uint32(length);
 
     //add the length
     payload.insert(payload.end(), length_array.begin(), length_array.end());
@@ -253,33 +238,10 @@ Curve25519State Kex::create_curve25519_keypair() const {
 std::vector<uint8_t> Kex::create_ecdh_init_payload(const Curve25519State& state) const {
     std::vector<uint8_t> payload{};
     payload.push_back(SSH_MSG_KEX_ECDH_INIT); 
-    const auto length = encode_uint32(uint32_t(length_of_key));
+    const auto length = ssh_encoding::encode_uint32(uint32_t(length_of_key));
     payload.insert(payload.end(), length.begin(), length.end());
     payload.insert(payload.end(), state.client_public_key.begin(), state.client_public_key.end());
     return payload;
-}
-
-std::vector<uint8_t> Kex::read_binary_string(const std::vector<uint8_t>& payload, std::size_t& position) const {
-    if (position > payload.size()) {
-        throw std::runtime_error("Position is outside SSH payload");
-    }
-    if (payload.size() - position < uint32_bytes) {
-        throw std::runtime_error("Expected string length");
-    }
-    std::array<uint8_t, uint32_bytes> length{};
-    std::copy_n(payload.begin() + position, length.size(), length.begin());
-    uint32_t string_length = read_uint32(length);
-    position += uint32_bytes;
-    
-    if (position > payload.size()) {
-        throw std::runtime_error("Position is outside SSH payload");
-    }
-    if (payload.size() - position < string_length) {
-        throw std::runtime_error("Expected string");
-    }
-    std::vector<uint8_t> result(payload.begin() + position, payload.begin() + position + string_length);
-    position += string_length;
-    return result;
 }
 
 EcdhReply Kex::parse_ecdh_reply(const std::vector<uint8_t>& payload) const {
@@ -293,13 +255,13 @@ EcdhReply Kex::parse_ecdh_reply(const std::vector<uint8_t>& payload) const {
 
     size_t position = 1;
 
-    result.server_host_key = read_binary_string(payload, position);
-    std::vector<uint8_t> server_public_key = read_binary_string(payload, position);
+    result.server_host_key = ssh_encoding::read_string(payload, position);
+    std::vector<uint8_t> server_public_key = ssh_encoding::read_string(payload, position);
     if (server_public_key.size() != result.server_public_key.size()) {
         throw std::runtime_error("Curve25519 server public key must be 32 bytes");
     }
     std::copy(server_public_key.begin(), server_public_key.end(), result.server_public_key.begin());
-    result.signature = read_binary_string(payload, position);
+    result.signature = ssh_encoding::read_string(payload, position);
 
     if (position != payload.size()) {
         throw std::runtime_error("No more bytes expected");
@@ -315,31 +277,6 @@ void Kex::calculate_shared_secret(Curve25519State& state, const std::array<uint8
     }
 }
 
-void Kex::append_binary_string(std::vector<uint8_t>& destination, const std::vector<uint8_t>& value) const {
-    if (value.size() > std::numeric_limits<uint32_t>::max()) {
-        throw std::runtime_error("Length is too long");
-    }
-    //get and add the length
-    auto length = encode_uint32(uint32_t(value.size()));
-    destination.insert(destination.end(), length.begin(), length.end());
-
-    //add remaining bytes
-    destination.insert(destination.end(), value.begin(), value.end());
-
-}
-
-void Kex::append_binary_string(std::vector<uint8_t>& destination, const std::string& value) const {
-    if (value.size() > std::numeric_limits<uint32_t>::max()) {
-        throw std::runtime_error("Length is too long");
-    }
-    //get and add the length
-    auto length = encode_uint32(uint32_t(value.size()));
-    destination.insert(destination.end(), length.begin(), length.end());
-
-    //add remaining bytes
-    destination.insert(destination.end(), value.begin(), value.end());
-}
-
 void Kex::append_positive_mpint(std::vector<uint8_t>& destination, const std::array<uint8_t, 32>& value) const {
     size_t count = 0;
     while (count < value.size()) {
@@ -353,20 +290,20 @@ void Kex::append_positive_mpint(std::vector<uint8_t>& destination, const std::ar
     if (!magnitude.empty() && (magnitude[0] & 0x80) != 0) {
         magnitude.insert(magnitude.begin(), 0);
     }
-    append_binary_string(destination, magnitude);
+    ssh_encoding::append_string(destination, magnitude);
 }
 
 std::array<uint8_t, 32> Kex::calculate_exchange_hash(const std::string& client_identification, const std::string& server_identification, const KexInit& client_kexinit, const KexInit& server_kexinit, const Curve25519State& curve_state, const EcdhReply& ecdh_reply) const {
     std::vector<uint8_t> destination{};
     std::vector<uint8_t> client_public_key(curve_state.client_public_key.begin(), curve_state.client_public_key.end());
     std::vector<uint8_t> server_public_key(ecdh_reply.server_public_key.begin(), ecdh_reply.server_public_key.end());
-    append_binary_string(destination, client_identification);
-    append_binary_string(destination, server_identification);
-    append_binary_string(destination, client_kexinit.raw_payload);
-    append_binary_string(destination, server_kexinit.raw_payload);
-    append_binary_string(destination, ecdh_reply.server_host_key);
-    append_binary_string(destination, client_public_key);
-    append_binary_string(destination, server_public_key);
+    ssh_encoding::append_string(destination, client_identification);
+    ssh_encoding::append_string(destination, server_identification);
+    ssh_encoding::append_string(destination, client_kexinit.raw_payload);
+    ssh_encoding::append_string(destination, server_kexinit.raw_payload);
+    ssh_encoding::append_string(destination, ecdh_reply.server_host_key);
+    ssh_encoding::append_string(destination, client_public_key);
+    ssh_encoding::append_string(destination, server_public_key);
     append_positive_mpint(destination, curve_state.shared_secret);
 
     std::array<uint8_t, 32> exchange_hash{};
@@ -378,13 +315,13 @@ std::array<uint8_t, 32> Kex::calculate_exchange_hash(const std::string& client_i
 Ed25519VerificationData Kex::parse_ed25519_verification_data(const EcdhReply& reply, const std::string& negotiated_host_key_algorithm) const{
     std::size_t position = 0;
     Ed25519VerificationData ed25519_data{};
-    std::vector<uint8_t> algorithm = read_binary_string(reply.server_host_key, position);
+    std::vector<uint8_t> algorithm = ssh_encoding::read_string(reply.server_host_key, position);
     std::string algorithm_name(algorithm.begin(), algorithm.end());
     if (algorithm_name != negotiated_host_key_algorithm || algorithm_name != "ssh-ed25519"){
         throw std::runtime_error("Algorithm is not the negotiated ssh-ed25519.");
     }
     
-    std::vector<uint8_t> public_key = read_binary_string(reply.server_host_key, position);
+    std::vector<uint8_t> public_key = ssh_encoding::read_string(reply.server_host_key, position);
     if (public_key.size() != ed25519_data.public_key.size()) {
         throw std::runtime_error("Ed25519 public key must be 32 bytes");
     }
@@ -396,13 +333,13 @@ Ed25519VerificationData Kex::parse_ed25519_verification_data(const EcdhReply& re
 
     position = 0;
 
-    std::vector<uint8_t> algorithm_sig = read_binary_string(reply.signature, position);
+    std::vector<uint8_t> algorithm_sig = ssh_encoding::read_string(reply.signature, position);
     std::string algorithm_sig_name(algorithm_sig.begin(), algorithm_sig.end());
     if (algorithm_name != negotiated_host_key_algorithm || algorithm_sig_name != "ssh-ed25519"){
         throw std::runtime_error("Algorithm is not the negotiated ssh-ed25519.");
     }
     
-    std::vector<uint8_t> signature_bytes = read_binary_string(reply.signature, position);
+    std::vector<uint8_t> signature_bytes = ssh_encoding::read_string(reply.signature, position);
     if (signature_bytes.size() != ed25519_data.signature.size()) {
         throw std::runtime_error("Ed25519 signature must be 64 bytes");
     }

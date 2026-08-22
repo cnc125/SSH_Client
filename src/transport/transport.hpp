@@ -27,7 +27,6 @@ public:
 private:
 
     static constexpr std::size_t packet_length_bytes = 4;
-    static constexpr std::size_t uint32_bytes = 4;
 
     uint32_t decode_packet_length(const std::array<uint8_t, packet_length_bytes>& length_bytes) const;
     void validate_packet_length(uint32_t packet_length) const;
@@ -39,7 +38,6 @@ private:
     std::vector<uint8_t> generate_padding(std::size_t padding_length) const;
 
     std::array<uint8_t, 32> calculate_hmac(uint32_t sequence_number, const std::vector<uint8_t>& plaintext_packet, const std::array<uint8_t, 32>& mac_key) const;
-    std::array<uint8_t, uint32_bytes> encode_uint32(uint32_t length) const;
 
     std::vector<uint8_t> encrypt_outgoing_packet(const std::vector<uint8_t>& plaintext_packet);
     std::vector<uint8_t> decrypt_incoming_bytes(const std::vector<uint8_t>& ciphertext);
