@@ -1,6 +1,8 @@
 #include "socket/socket.hpp"
 #include "transport/transport.hpp"
+#include "auth/auth.hpp"
 #include "kex/kex.hpp"
+#include "terminal/terminal.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -180,6 +182,42 @@ int main() {
         std::cout << "NEWKEYS exchange completed" << "\n";
         transport.enable_incoming_encryption(transport_keys.iv_sc, transport_keys.encryption_key_sc, transport_keys.mac_key_sc);
 
+        //authentication
+        Auth auth;
+        std::vector<uint8_t> payload = auth.create_service_request();
+        transport.send_packet(payload);
+
+        std::vector<uint8_t> auth_response = transport.receive_packet();
+        auth.validate_service_accept(auth_response);
+
+        std::cout << "User authentication service accepted\n";
+
+        transport.send_packet(auth.create_none_auth_request("cnc125"));
+        AuthFailure auth_failure = auth.parse_auth_failure(transport.receive_packet());
+        
+        std::cout << "Available Methods: " << auth_failure.available_methods << "\n";
+        std::cout << "Partial Success: " << auth_failure.partial_success << "\n";
+
+        Terminal terminal;
+        std::string password = terminal.read_hidden_input("Password: ");
+        std::vector<uint8_t> auth_request = auth.create_password_auth_request("cnc125", password);
+        transport.send_packet(auth_request);
+        auth_response = transport.receive_packet();
+        if (auth_response.size() == 0) {
+            throw std::runtime_error("Packet contained 0 bytes");
+        }
+        if (auth_response[0] == 52) {
+            auth.validate_auth_success(auth_response);
+            std::cout << "Authentication Complete\n";
+        }
+        else if (auth_response[0] == 51) {
+            auth.parse_auth_failure(auth_response);
+            throw std::runtime_error("Password authentication rejected");
+        }
+        else {
+            throw std::runtime_error("Unexpected response");
+        }
+  
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;

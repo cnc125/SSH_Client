@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <cstdint>
 
 namespace {
 constexpr std::size_t bits_per_byte = 8;
