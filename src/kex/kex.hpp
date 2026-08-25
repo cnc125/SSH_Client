@@ -84,18 +84,13 @@ private:
     static constexpr std::size_t uint32_bytes = 4;
     static constexpr std::size_t cookie_bytes = 16;
 
-    uint32_t read_uint32(const std::array<uint8_t, uint32_bytes>& length_bytes) const;
     std::string read_name_list(const std::vector<uint8_t>& payload, std::size_t& position) const;
     bool parse_boolean(const std::vector<uint8_t>& payload, std::size_t& position) const;
-    std::array<uint8_t, uint32_bytes> encode_uint32(uint32_t length) const;
 
     void append_name_list(std::vector<uint8_t>& payload, const std::string& list) const;
 
     std::string choose_algorithm(const std::string& client_list, const std::string& server_list) const;
-    std::vector<uint8_t> read_binary_string(const std::vector<uint8_t>& payload, std::size_t& position) const;
 
-    void append_binary_string(std::vector<uint8_t>& destination, const std::vector<uint8_t>& value) const;
-    void append_binary_string(std::vector<uint8_t>& destination, const std::string& value) const;
     void append_positive_mpint(std::vector<uint8_t>& destination, const std::array<uint8_t, 32>& value) const;
 
     std::array<uint8_t, 32> derive_key_material(const std::array<uint8_t, 32>& shared_secret, const std::array<uint8_t, 32>& exchange_hash, uint8_t letter, const std::array<uint8_t, 32>& session_id) const;

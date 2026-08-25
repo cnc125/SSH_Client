@@ -5,6 +5,7 @@ LDFLAGS  = -lsodium -lcrypto
 TARGET   = bin/ssh
 
 SRCS     = src/main.cpp \
+           src/common/ssh_encoding.cpp \
            src/socket/socket.cpp \
            src/transport/transport.cpp \
            src/kex/kex.cpp \

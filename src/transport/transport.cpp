@@ -1,4 +1,5 @@
 #include "transport.hpp"
+#include "common/ssh_encoding.hpp"
 #include <stdexcept>
 #include <cstddef>
 #include <limits>
@@ -253,7 +254,7 @@ void Transport::enable_incoming_encryption(const std::array<uint8_t, 16>& iv, co
 }
 
 std::array<uint8_t, 32> Transport::calculate_hmac(uint32_t sequence_number, const std::vector<uint8_t>& plaintext_packet, const std::array<uint8_t, 32>& mac_key) const {
-    std::array<uint8_t, Transport::uint32_bytes> sequence_number_arr = encode_uint32(sequence_number);
+    const auto sequence_number_arr = ssh_encoding::encode_uint32(sequence_number);
     std::vector<uint8_t> input{};
     input.insert(input.end(), sequence_number_arr.begin(), sequence_number_arr.end());
     input.insert(input.end(), plaintext_packet.begin(), plaintext_packet.end());
@@ -262,14 +263,6 @@ std::array<uint8_t, 32> Transport::calculate_hmac(uint32_t sequence_number, cons
         throw std::runtime_error("Failed to calculate hmac value");
     }
     return result;
-}
-
-std::array<uint8_t, Transport::uint32_bytes> Transport::encode_uint32(uint32_t length) const {
-    std::array<uint8_t, uint32_bytes> encoded;
-    for (size_t i = 0; i<uint32_bytes; i++) {
-        encoded[i] = uint8_t(length >> ((uint32_bytes - 1 - i) * bits_per_byte));
-    }
-    return encoded;
 }
 
 std::vector<uint8_t> Transport::encrypt_outgoing_packet(const std::vector<uint8_t>& plaintext_packet) {
