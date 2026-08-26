@@ -9,6 +9,10 @@
 #include <vector>
 #include <stdexcept>
 #include <sodium.h>
+#include <poll.h>
+#include <unistd.h>
+#include <algorithm>
+#include <cerrno>
 
 namespace {
     constexpr uint8_t SSH_MSG_KEXINIT = 20;
@@ -122,12 +126,10 @@ void open_session_channel(Connection& connection, Transport& transport, Channel&
     }
 }
 
-void request_exec(Connection& connection, Transport& transport, Channel& channel, const std::string& command) {
-    transport.send_packet(connection.create_exec_request(channel, command));
+void wait_for_channel_request_result(Connection& connection, Transport& transport, Channel& channel, const std::string& request_name) {
+    bool request_accepted = false;
 
-    bool exec_accepted = false;
-
-    while (!exec_accepted) {
+    while (!request_accepted) {
         auto command_response = transport.receive_packet();
         if (command_response.size() == 0) {
             throw std::runtime_error("Packet contained 0 bytes");
@@ -135,12 +137,12 @@ void request_exec(Connection& connection, Transport& transport, Channel& channel
         
         if (command_response[0] == 99) {
             connection.validate_channel_success(command_response, channel);
-            std::cout << "Channel Success\n";
-            exec_accepted = true;
+            std::cout << request_name + " request accepted\n";
+            request_accepted = true;
         }
         else if (command_response[0] == 100) {
             connection.validate_channel_failure(command_response, channel);
-            throw std::runtime_error("Channel Failure");
+            throw std::runtime_error(request_name + " request rejected");
         }
         else if (command_response[0] == 80) {
             handle_global_request(command_response, connection, transport);
@@ -149,9 +151,15 @@ void request_exec(Connection& connection, Transport& transport, Channel& channel
             connection.parse_window_adjust(command_response, channel);
         }
         else {
-            throw std::runtime_error("Unexpected response received during command execution");
+            throw std::runtime_error("Unexpected response received while waiting for " + request_name);
         }
     }
+}
+
+
+void request_exec(Connection& connection, Transport& transport, Channel& channel, const std::string& command) {
+    transport.send_packet(connection.create_exec_request(channel, command));
+    wait_for_channel_request_result(connection, transport, channel, "exec");
 }
 
 uint32_t process_command_messages(Connection& connection, Transport& transport, Channel& channel) {
@@ -217,6 +225,114 @@ uint32_t process_command_messages(Connection& connection, Transport& transport, 
         throw std::runtime_error("No exit status available");
     }
     return channel.exit_status;
+}
+
+void request_pty(Connection& connection, Transport& transport, Channel& channel, const TerminalInfo& terminal_info) {
+    transport.send_packet(connection.create_pty_request(channel, terminal_info.type, terminal_info.columns, terminal_info.rows));
+    wait_for_channel_request_result(connection, transport, channel, "pty-req");
+}
+
+void request_shell(Connection& connection, Transport& transport, Channel& channel) {
+    transport.send_packet(connection.create_shell_request(channel));
+    wait_for_channel_request_result(connection, transport, channel, "shell");
+}
+
+void run_interactive_shell(Socket& sock, Connection& connection, Transport& transport, Channel& channel, Terminal& terminal) {
+    terminal.enable_raw_mode();
+    pollfd inputs[2]{};
+    inputs[0].fd = STDIN_FILENO;
+    inputs[0].events = POLLIN;
+    inputs[1].fd = sock.get_fd();
+    inputs[1].events = POLLIN;
+
+    while (channel.open) {
+        if (channel.remote_window > 0) {
+            inputs[0].events = POLLIN;
+        } else {
+            inputs[0].events = 0;
+        }
+        // 2 = 2 INPUTS
+        // -1 = wait indefinitely
+        int read_count = poll(inputs, 2, -1);
+
+        if (read_count == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+            throw std::runtime_error("poll failed");
+        }
+
+        if (inputs[0].revents & POLLIN) {
+            std::array<uint8_t, 1024> keyboard_buffer{};
+
+            std::size_t max_read = keyboard_buffer.size();
+
+            max_read = std::min(max_read, static_cast<std::size_t>(channel.remote_window));
+
+            max_read = std::min(max_read, static_cast<std::size_t>(channel.remote_max_packet));
+
+            ssize_t bytes_read = read(STDIN_FILENO, keyboard_buffer.data(), max_read);
+            if (bytes_read == -1) {
+                throw std::runtime_error("Failed to read keyboard input");
+            }
+            if (bytes_read > 0) {
+                std::vector<uint8_t> keyboard_data(keyboard_buffer.begin(), keyboard_buffer.begin() + bytes_read);
+                transport.send_packet(connection.create_channel_data(channel, keyboard_data));
+                channel.remote_window -= keyboard_data.size();
+            }
+        }
+        if (inputs[1].revents & POLLIN) {
+            std::vector<uint8_t> response = transport.receive_packet();
+            if (response.empty()) {
+                throw std::runtime_error("Received an empty SSH packet");
+            }
+            uint8_t message_type = response[0];
+            bool consumed_local_window = false;
+
+            if (message_type == 94) {
+                std::vector<uint8_t> data = connection.parse_channel_data(response, channel);
+                std::cout.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+                std::cout.flush();
+                consumed_local_window = true;
+            } else if (message_type == 93) {
+                connection.parse_window_adjust(response, channel);
+            } else if (message_type == 80) {
+                handle_global_request(response, connection, transport);
+            } else if (message_type == 95) {
+                ChannelExtendedData extended = connection.parse_channel_extended_data(response, channel);
+                std::cerr.write(reinterpret_cast<const char*>(extended.data.data()), static_cast<std::streamsize>(extended.data.size()));
+                std::cerr.flush();
+                consumed_local_window = true;
+            } else if (message_type == 96) {
+                connection.parse_channel_eof(response, channel);
+            } else if (message_type == 98) {
+                connection.parse_exit_status(response, channel);
+            } else if (message_type == 97) {
+                connection.parse_channel_close(response, channel);
+                if (!channel.local_close_sent) {
+                    transport.send_packet(
+                    connection.create_channel_close(channel));
+                    channel.local_close_sent = true;
+                }
+            } else {
+                throw std::runtime_error("Unexpected SSH message during interactive shell");
+            }
+            if (consumed_local_window && channel.open && channel.local_window <= LOCAL_WINDOW_THRESHOLD) {
+                uint32_t difference = LOCAL_WINDOW_TARGET - channel.local_window;
+
+                transport.send_packet(connection.create_window_adjust(channel, difference));
+
+                channel.local_window += difference;
+            }
+            if (channel.local_close_sent && channel.remote_close_received) {
+                channel.open = false;
+            }
+        }
+        if (channel.open && (inputs[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            throw std::runtime_error("SSH socket closed unexpectedly");
+        }
+    }
+    terminal.restore();
 }
 
 int main() {
@@ -360,14 +476,14 @@ int main() {
         channel.local_max_packet = 32 * 1024;
 
         open_session_channel(connection, transport, channel);
-        request_exec(connection, transport, channel, "ls SSH-Cli");
-        uint32_t remote_status = process_command_messages(connection, transport, channel);
-        
-        if (remote_status == 0) {
-            std::cout << "Command succeeded\n";
-        } else {
-            std::cout << "Command failed with status: " << remote_status << '\n';
-        } 
+        TerminalInfo terminal_info = terminal.get_terminal_info();
+        request_pty(connection, transport, channel, terminal_info);
+        request_shell(connection, transport, channel);
+        run_interactive_shell(sock, connection, transport, channel, terminal);
+
+        if (channel.exit_status_received) {
+            std::cout << "\nRemote exit status: " << channel.exit_status << '\n';
+        }
   
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";

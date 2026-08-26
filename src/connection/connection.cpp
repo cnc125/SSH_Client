@@ -456,3 +456,78 @@ std::vector<uint8_t> Connection::create_window_adjust(const Channel& channel, ui
     payload.insert(payload.end(), bytes_arr.begin(), bytes_arr.end());
     return payload;
 }
+
+std::vector<uint8_t> Connection::create_pty_request(const Channel& channel, const std::string& terminal_type, uint32_t columns, uint32_t rows) const {
+    if (!channel.open) {
+        throw std::runtime_error("Channel already closed");
+    }
+
+    if (terminal_type.size() == 0) {
+        throw std::runtime_error("Must provide a non-empty terminal_type");
+    }
+
+    if (columns == 0 || rows == 0) {
+        throw std::runtime_error("Columns and rows must be non-zero values");
+    }
+
+    std::vector<uint8_t> payload;
+    payload.push_back(SSH_MSG_CHANNEL_REQUEST);
+    auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
+    payload.insert(payload.end(), remote_id.begin(), remote_id.end());
+    ssh_encoding::append_string(payload, "pty-req");
+    payload.push_back(1);
+    ssh_encoding::append_string(payload, terminal_type);
+    auto columns_arr = ssh_encoding::encode_uint32(columns);
+    auto rows_arr = ssh_encoding::encode_uint32(rows);
+    auto zero_arr = ssh_encoding::encode_uint32(0);
+    payload.insert(payload.end(), columns_arr.begin(), columns_arr.end());
+    payload.insert(payload.end(), rows_arr.begin(), rows_arr.end());
+    payload.insert(payload.end(), zero_arr.begin(), zero_arr.end());
+    payload.insert(payload.end(), zero_arr.begin(), zero_arr.end());
+    std::vector<uint8_t> terminal_modes{0};
+    ssh_encoding::append_string(payload, terminal_modes);
+    return payload;
+ }
+
+ std::vector<uint8_t> Connection::create_shell_request(const Channel& channel) const {
+    if (!channel.open) {
+        throw std::runtime_error("Channel is already closed");
+    }
+
+    std::vector<uint8_t> payload;
+    payload.push_back(SSH_MSG_CHANNEL_REQUEST);
+    auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
+    payload.insert(payload.end(), remote_id.begin(), remote_id.end());
+    ssh_encoding::append_string(payload, "shell");
+    payload.push_back(1);
+    return payload;
+ }
+
+ std::vector<uint8_t> Connection::create_channel_data(const Channel& channel, const std::vector<uint8_t>& data) const {
+    if (!channel.open) {
+        throw std::runtime_error("Channel is already closed");
+    }
+
+    if (channel.local_close_sent) {
+        throw std::runtime_error("Request to close channel sent");
+    }
+
+    if (data.empty()) {
+        throw std::runtime_error("No data to be sent"); 
+    }
+
+    if (data.size() > channel.remote_window) {
+        throw std::runtime_error("Remote channel doesn't have enough capacity");
+    }
+
+    if (data.size() > channel.remote_max_packet) {
+        throw std::runtime_error("Packet is too large to be sent");
+    }
+
+    std::vector<uint8_t> payload;
+    payload.push_back(SSH_MSG_CHANNEL_DATA);
+    auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
+    payload.insert(payload.end(), remote_id.begin(), remote_id.end());
+    ssh_encoding::append_string(payload, data);
+    return payload;
+ }
