@@ -337,7 +337,7 @@ void run_interactive_shell(Socket& sock, Connection& connection, Transport& tran
 }
 
 
-// Completes key exchange, verifies the host, and enables encrypted transport.
+// Completes key exchange, verifies the host, and enables encrypted transport
 void perform_key_exchange(Transport& transport, const IdentificationExchange& id, KnownHosts& known_hosts, const std::string& hostname) {
     KexInit client_kexinit = send_kexinit(transport);
     KexInit server_kexinit = receive_kexinit(transport);
@@ -440,7 +440,7 @@ void perform_key_exchange(Transport& transport, const IdentificationExchange& id
     transport.enable_incoming_encryption(transport_keys.iv_sc, transport_keys.encryption_key_sc, transport_keys.mac_key_sc);
 }
 
-// Authenticates the configured user with a password.
+// Authenticates the configured user with a password
 void authenticate_user(Transport& transport, Terminal& terminal) {
     //authentication
     Auth auth;
@@ -479,7 +479,7 @@ void authenticate_user(Transport& transport, Terminal& terminal) {
 
 }
 
-// Opens a session channel and runs the interactive remote shell.
+// Opens a session channel and runs the interactive remote shell
 void run_connection_session(Socket& sock, Transport& transport, Terminal& terminal) {
     //CONNECTION LAYER
     Connection connection;
