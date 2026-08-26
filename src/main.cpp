@@ -336,6 +336,169 @@ void run_interactive_shell(Socket& sock, Connection& connection, Transport& tran
     terminal.restore();
 }
 
+
+// Completes key exchange, verifies the host, and enables encrypted transport.
+void perform_key_exchange(Transport& transport, const IdentificationExchange& id, KnownHosts& known_hosts, const std::string& hostname) {
+    KexInit client_kexinit = send_kexinit(transport);
+    KexInit server_kexinit = receive_kexinit(transport);
+
+    Kex kex;
+    NegotiatedAlgorithms algorithms = kex.negotiate(client_kexinit, server_kexinit);
+
+    std::cout << "Negotiated algorithms:\n";
+    std::cout << "KEX: " << algorithms.kex_algorithm << '\n';
+    std::cout << "Host key: " << algorithms.host_key_algorithm << '\n';
+    std::cout << "Encryption client -> server: "
+      << algorithms.encryption_cs_algorithm << '\n';
+    std::cout << "Encryption server -> client: "
+      << algorithms.encryption_sc_algorithm << '\n';
+    std::cout << "MAC client -> server: "
+      << algorithms.mac_cs_algorithm << '\n';
+    std::cout << "MAC server -> client: "
+      << algorithms.mac_sc_algorithm << '\n';
+    std::cout << "Compression client -> server: "
+      << algorithms.compression_cs_algorithm << '\n';
+    std::cout << "Compression server -> client: "
+      << algorithms.compression_sc_algorithm << '\n';
+
+    Curve25519State keypair;
+    if (algorithms.kex_algorithm == "curve25519-sha256") {
+        keypair = kex.create_curve25519_keypair();
+    } else {
+        throw std::runtime_error("Negotiated algorithm not implemented");
+    }
+    std::vector<uint8_t> ecdh_init = kex.create_ecdh_init_payload(keypair);
+    transport.send_packet(ecdh_init);
+
+    std::cout << "Sent SSH_MSG_KEX_ECDH_INIT\n";
+
+    auto reply = transport.receive_packet();
+    if (reply.empty()) {
+        throw std::runtime_error("Empty SSH reply");
+    }
+    if (reply[0] != ssh_message::KEX_ECDH_REPLY) {
+        throw std::runtime_error("Expected an SSH_MSG_KEX_ECDH_REPLY");
+    } else {
+        std::cout << "Received SSH_MSG_KEX_ECDH_REPLY\n";
+    }
+    EcdhReply ecdh_reply = kex.parse_ecdh_reply(reply);
+    kex.calculate_shared_secret(keypair, ecdh_reply.server_public_key);
+    std::cout << "Shared secret calculated successfully\n";
+
+    std::array<uint8_t, 32> exchange_hash = kex.calculate_exchange_hash(id.client, id.server, client_kexinit, server_kexinit, keypair, ecdh_reply);
+
+    Ed25519VerificationData verification_data = kex.parse_ed25519_verification_data(ecdh_reply, algorithms.host_key_algorithm);
+
+    kex.verify_ed25519_signature(verification_data, exchange_hash);
+    std::array<uint8_t, 32> fingerprint = kex.calculate_host_key_fingerprint(ecdh_reply.server_host_key);
+
+    std::string fingerprint_text = format_sha256_fingerprint(fingerprint);
+    HostKeyStatus host_status = known_hosts.check(hostname, algorithms.host_key_algorithm, ecdh_reply.server_host_key);
+
+    if (host_status == HostKeyStatus::Match) {
+        std::cout << "Server host key matches known host\n";
+    } else if (host_status == HostKeyStatus::Changed) {
+        std::cerr << "WARNING: Server host key has changed!\n";
+        std::cerr << "Received fingerprint: " << fingerprint_text << '\n';
+        throw std::runtime_error("Refusing connection due to changed host key");
+    } else {
+        std::cout << "Unknown server host key\n";
+        std::cout << "Fingerprint: " << fingerprint_text << '\n';
+
+        std::cout << "Do you trust this host key? [yes/no]: ";
+
+        std::string answer;
+        std::getline(std::cin, answer);
+
+        if (answer != "yes") {
+            throw std::runtime_error("Host key was not trusted");
+        }
+
+        known_hosts.add(hostname, algorithms.host_key_algorithm, ecdh_reply.server_host_key);
+        std::cout << "Host key saved\n";
+    }
+
+    std::array<uint8_t, 32> session_id = exchange_hash;
+
+    TransportKeyMaterial transport_keys = kex.derive_transport_keys(keypair.shared_secret, exchange_hash, session_id);
+
+    //send NEWKEYS
+    std::vector<uint8_t> payload_newkeys{};
+    payload_newkeys.push_back(ssh_message::NEWKEYS);
+    transport.send_packet(payload_newkeys);
+    transport.enable_outgoing_encryption(transport_keys.iv_cs, transport_keys.encryption_key_cs, transport_keys.mac_key_cs);
+
+    //get server NEWKEYS response
+    std::vector<uint8_t> server_newkeys = transport.receive_packet();
+    if (server_newkeys.size() != 1) {
+        throw std::runtime_error("Expected a packet of length 1 byte");
+    }
+    if (server_newkeys[0] != ssh_message::NEWKEYS) {
+        throw std::runtime_error("Expected a SSH_MSG_NEWKEYS packet");
+    }
+    std::cout << "NEWKEYS exchange completed" << "\n";
+    transport.enable_incoming_encryption(transport_keys.iv_sc, transport_keys.encryption_key_sc, transport_keys.mac_key_sc);
+}
+
+// Authenticates the configured user with a password.
+void authenticate_user(Transport& transport, Terminal& terminal) {
+    //authentication
+    Auth auth;
+    std::vector<uint8_t> payload = auth.create_service_request();
+    transport.send_packet(payload);
+
+    std::vector<uint8_t> auth_response = transport.receive_packet();
+    auth.validate_service_accept(auth_response);
+
+    std::cout << "User authentication service accepted\n";
+
+    transport.send_packet(auth.create_none_auth_request("cnc125"));
+    AuthFailure auth_failure = auth.parse_auth_failure(transport.receive_packet());
+
+    std::cout << "Available Methods: " << auth_failure.available_methods << "\n";
+    std::cout << "Partial Success: " << auth_failure.partial_success << "\n";
+
+    std::string password = terminal.read_hidden_input("Password: ");
+    std::vector<uint8_t> auth_request = auth.create_password_auth_request("cnc125", password);
+    transport.send_packet(auth_request);
+    auth_response = transport.receive_packet();
+    if (auth_response.size() == 0) {
+        throw std::runtime_error("Packet contained 0 bytes");
+    }
+    if (auth_response[0] == ssh_message::USERAUTH_SUCCESS) {
+        auth.validate_auth_success(auth_response);
+        std::cout << "Authentication Complete\n";
+    }
+    else if (auth_response[0] == ssh_message::USERAUTH_FAILURE) {
+        auth.parse_auth_failure(auth_response);
+        throw std::runtime_error("Password authentication rejected");
+    }
+    else {
+        throw std::runtime_error("Unexpected response - authentication");
+    }
+
+}
+
+// Opens a session channel and runs the interactive remote shell.
+void run_connection_session(Socket& sock, Transport& transport, Terminal& terminal) {
+    //CONNECTION LAYER
+    Connection connection;
+    Channel channel{};
+    channel.local_id = 0;
+    channel.local_window = LOCAL_WINDOW_TARGET;
+    channel.local_max_packet = 32 * 1024;
+
+    open_session_channel(connection, transport, channel);
+    TerminalInfo terminal_info = terminal.get_terminal_info();
+    request_pty(connection, transport, channel, terminal_info);
+    request_shell(connection, transport, channel);
+    run_interactive_shell(sock, connection, transport, channel, terminal);
+
+    if (channel.exit_status_received) {
+        std::cout << "\nRemote exit status: " << channel.exit_status << '\n';
+    }
+}
+
 int main() {
     try {
         int result = sodium_init();
@@ -355,159 +518,12 @@ int main() {
         IdentificationExchange id = exchange_identification(sock);
 
         Transport transport(sock);
-        KexInit client_kexinit = send_kexinit(transport);
-        KexInit server_kexinit = receive_kexinit(transport);
-
-        Kex kex;
-        NegotiatedAlgorithms algorithms = kex.negotiate(client_kexinit, server_kexinit);
-
-        std::cout << "Negotiated algorithms:\n";
-        std::cout << "KEX: " << algorithms.kex_algorithm << '\n';
-        std::cout << "Host key: " << algorithms.host_key_algorithm << '\n';
-        std::cout << "Encryption client -> server: "
-          << algorithms.encryption_cs_algorithm << '\n';
-        std::cout << "Encryption server -> client: "
-          << algorithms.encryption_sc_algorithm << '\n';
-        std::cout << "MAC client -> server: "
-          << algorithms.mac_cs_algorithm << '\n';
-        std::cout << "MAC server -> client: "
-          << algorithms.mac_sc_algorithm << '\n';
-        std::cout << "Compression client -> server: "
-          << algorithms.compression_cs_algorithm << '\n';
-        std::cout << "Compression server -> client: "
-          << algorithms.compression_sc_algorithm << '\n';
-
-        Curve25519State keypair;
-        if (algorithms.kex_algorithm == "curve25519-sha256") {
-            keypair = kex.create_curve25519_keypair();
-        } else {
-            throw std::runtime_error("Negotiated algorithm not implemented");
-        }
-        std::vector<uint8_t> ecdh_init = kex.create_ecdh_init_payload(keypair);
-        transport.send_packet(ecdh_init);
-
-        std::cout << "Sent SSH_MSG_KEX_ECDH_INIT\n";
-
-        auto reply = transport.receive_packet();
-        if (reply.empty()) {
-            throw std::runtime_error("Empty SSH reply");
-        }
-        if (reply[0] != ssh_message::KEX_ECDH_REPLY) {
-            throw std::runtime_error("Expected an SSH_MSG_KEX_ECDH_REPLY");
-        } else {
-            std::cout << "Received SSH_MSG_KEX_ECDH_REPLY\n";
-        }
-        EcdhReply ecdh_reply = kex.parse_ecdh_reply(reply);
-        kex.calculate_shared_secret(keypair, ecdh_reply.server_public_key);
-        std::cout << "Shared secret calculated successfully\n";
-
-        std::array<uint8_t, 32> exchange_hash = kex.calculate_exchange_hash(id.client, id.server, client_kexinit, server_kexinit, keypair, ecdh_reply);
-
-        Ed25519VerificationData verification_data = kex.parse_ed25519_verification_data(ecdh_reply, algorithms.host_key_algorithm);
-
-        kex.verify_ed25519_signature(verification_data, exchange_hash);
-        std::array<uint8_t, 32> fingerprint = kex.calculate_host_key_fingerprint(ecdh_reply.server_host_key);
-
-        std::string fingerprint_text = format_sha256_fingerprint(fingerprint);
-        HostKeyStatus host_status = known_hosts.check(hostname, algorithms.host_key_algorithm, ecdh_reply.server_host_key);
-
-        if (host_status == HostKeyStatus::Match) {
-            std::cout << "Server host key matches known host\n";
-        } else if (host_status == HostKeyStatus::Changed) {
-            std::cerr << "WARNING: Server host key has changed!\n";
-            std::cerr << "Received fingerprint: " << fingerprint_text << '\n';
-            throw std::runtime_error("Refusing connection due to changed host key");
-        } else {
-            std::cout << "Unknown server host key\n";
-            std::cout << "Fingerprint: " << fingerprint_text << '\n';
-
-            std::cout << "Do you trust this host key? [yes/no]: ";
-
-            std::string answer;
-            std::getline(std::cin, answer);
-
-            if (answer != "yes") {
-                throw std::runtime_error("Host key was not trusted");
-            }
-
-            known_hosts.add(hostname, algorithms.host_key_algorithm, ecdh_reply.server_host_key);
-            std::cout << "Host key saved\n";
-        }
-
-        std::array<uint8_t, 32> session_id = exchange_hash;
-
-        TransportKeyMaterial transport_keys = kex.derive_transport_keys(keypair.shared_secret, exchange_hash, session_id);
-
-        //send NEWKEYS
-        std::vector<uint8_t> payload_newkeys{};
-        payload_newkeys.push_back(ssh_message::NEWKEYS);
-        transport.send_packet(payload_newkeys);
-        transport.enable_outgoing_encryption(transport_keys.iv_cs, transport_keys.encryption_key_cs, transport_keys.mac_key_cs);
-
-        //get server NEWKEYS response
-        std::vector<uint8_t> server_newkeys = transport.receive_packet();
-        if (server_newkeys.size() != 1) {
-            throw std::runtime_error("Expected a packet of length 1 byte");
-        }
-        if (server_newkeys[0] != ssh_message::NEWKEYS) {
-            throw std::runtime_error("Expected a SSH_MSG_NEWKEYS packet");
-        }
-        std::cout << "NEWKEYS exchange completed" << "\n";
-        transport.enable_incoming_encryption(transport_keys.iv_sc, transport_keys.encryption_key_sc, transport_keys.mac_key_sc);
-
-        //authentication
-        Auth auth;
-        std::vector<uint8_t> payload = auth.create_service_request();
-        transport.send_packet(payload);
-
-        std::vector<uint8_t> auth_response = transport.receive_packet();
-        auth.validate_service_accept(auth_response);
-
-        std::cout << "User authentication service accepted\n";
-
-        transport.send_packet(auth.create_none_auth_request("cnc125"));
-        AuthFailure auth_failure = auth.parse_auth_failure(transport.receive_packet());
-        
-        std::cout << "Available Methods: " << auth_failure.available_methods << "\n";
-        std::cout << "Partial Success: " << auth_failure.partial_success << "\n";
+        perform_key_exchange(transport, id, known_hosts, hostname);
 
         Terminal terminal;
-        std::string password = terminal.read_hidden_input("Password: ");
-        std::vector<uint8_t> auth_request = auth.create_password_auth_request("cnc125", password);
-        transport.send_packet(auth_request);
-        auth_response = transport.receive_packet();
-        if (auth_response.size() == 0) {
-            throw std::runtime_error("Packet contained 0 bytes");
-        }
-        if (auth_response[0] == ssh_message::USERAUTH_SUCCESS) {
-            auth.validate_auth_success(auth_response);
-            std::cout << "Authentication Complete\n";
-        }
-        else if (auth_response[0] == ssh_message::USERAUTH_FAILURE) {
-            auth.parse_auth_failure(auth_response);
-            throw std::runtime_error("Password authentication rejected");
-        }
-        else {
-            throw std::runtime_error("Unexpected response - authentication");
-        }
+        authenticate_user(transport, terminal);
 
-
-        //CONNECTION LAYER
-        Connection connection;
-        Channel channel{};
-        channel.local_id = 0;
-        channel.local_window = LOCAL_WINDOW_TARGET;
-        channel.local_max_packet = 32 * 1024;
-
-        open_session_channel(connection, transport, channel);
-        TerminalInfo terminal_info = terminal.get_terminal_info();
-        request_pty(connection, transport, channel, terminal_info);
-        request_shell(connection, transport, channel);
-        run_interactive_shell(sock, connection, transport, channel, terminal);
-
-        if (channel.exit_status_received) {
-            std::cout << "\nRemote exit status: " << channel.exit_status << '\n';
-        }
+        run_connection_session(sock, transport, terminal);
   
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
