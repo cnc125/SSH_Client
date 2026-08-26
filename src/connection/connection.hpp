@@ -46,6 +46,22 @@ public:
 
     //creates a payload for SSH_MSG_REQUEST_FAILURE
     std::vector<uint8_t> create_request_failure() const;
+
+    //creates a request to the open channel to run a command
+    std::vector<uint8_t> create_exec_request(const Channel& channel, const std::string& command) const;
+
+    //validates SSH_MSG_CHANNEL_SUCCESS
+    void validate_channel_success(const std::vector<uint8_t>& payload, const Channel& channel) const;
+
+    //validates SSH_MSG_CHANNEL_FAILURE
+    void validate_channel_failure(const std::vector<uint8_t>& payload, const Channel& channel) const;
+
+    //parses SSH_MSG_CHANNEL_WINDOW_ADJUDT
+    void parse_window_adjust(const std::vector<uint8_t>& payload, Channel& channel) const;
+
+    //parse responses from server after sending commands
+    std::vector<uint8_t> parse_channel_data(const std::vector<uint8_t>& payload, Channel& channel) const;
+
 private:
 
 };

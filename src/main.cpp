@@ -252,6 +252,72 @@ int main() {
                 throw std::runtime_error("Unexpected response - connection open");
             }
         }
+        transport.send_packet(connection.create_exec_request(channel, "ls"));
+
+        bool exec_accepted = false;
+
+        while (!exec_accepted) {
+            auto command_response = transport.receive_packet();
+            if (command_response.size() == 0) {
+                throw std::runtime_error("Packet contained 0 bytes");
+            }
+            
+            if (command_response[0] == 99) {
+                connection.validate_channel_success(command_response, channel);
+                std::cout << "Channel Success\n";
+                exec_accepted = true;
+            }
+            else if (command_response[0] == 100) {
+                connection.validate_channel_failure(command_response, channel);
+                throw std::runtime_error("Channel Failure");
+            }
+            else if (command_response[0] == 80) {
+                GlobalRequest gr = connection.parse_global_request(command_response);
+                std::cout << "Received SSH_MSG_GLOBAL_REQUEST: " << gr.request_name << "\n";
+                if (gr.want_reply) {
+                    transport.send_packet(connection.create_request_failure());
+                }
+            }
+            else if (command_response[0] == 93) {
+                connection.parse_window_adjust(command_response, channel);
+            }
+            else {
+                std::cout << "Received while waiting for exec response: "
+            << static_cast<int>(command_response[0])
+            << '\n';
+                throw std::runtime_error("Unexpected response - command exec");
+            }
+        }
+
+        while (true) {
+            std::vector<uint8_t> response = transport.receive_packet();
+            if (response.size() == 0) {
+                throw std::runtime_error("Packet contained 0 bytes");
+            }
+
+            uint8_t message_type = response[0];
+
+            if (message_type == 94) {
+                std::vector<uint8_t> data = connection.parse_channel_data(response, channel);
+                std::cout.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+                std::cout.flush();
+            }
+            else if (message_type == 93) {
+                connection.parse_window_adjust(response, channel);
+            }
+            else if (message_type == 80) {
+                GlobalRequest gr = connection.parse_global_request(response);
+                std::cout << "Received SSH_MSG_GLOBAL_REQUEST: " << gr.request_name << "\n";
+                if (gr.want_reply) {
+                    transport.send_packet(connection.create_request_failure());
+                }
+            }
+            else {
+                std::cout << "\nNext unhandled message: "<< static_cast<int>(message_type) << '\n';
+                break;
+            }
+        }
+        
         
   
     } catch (const std::exception& e) {
