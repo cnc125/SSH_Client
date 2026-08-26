@@ -301,9 +301,13 @@ void Connection::parse_channel_eof(const std::vector<uint8_t>& payload, Channel&
     channel.remote_eof_received = true;
 }
 
-ChannelExitStatus Connection::parse_exit_status(const std::vector<uint8_t>& payload, const Channel& channel) const {
+ChannelExitStatus Connection::parse_exit_status(const std::vector<uint8_t>& payload, Channel& channel) const {
     if (!channel.open) {
         throw std::runtime_error("Exit status received for a closed channel");
+    }
+
+    if (channel.exit_status_received) {
+        throw std::runtime_error("Exit status already received");
     }
 
     if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_REQUEST) {
@@ -335,6 +339,9 @@ ChannelExitStatus Connection::parse_exit_status(const std::vector<uint8_t>& payl
     if (position != payload.size()) {
         throw std::runtime_error("Payload contains more bytes than expected");
     }
+
+    channel.exit_status = exit_status;
+    channel.exit_status_received = true;
 
     ChannelExitStatus ces{};
     ces.exit_status = exit_status;

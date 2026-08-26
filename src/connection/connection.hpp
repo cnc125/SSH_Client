@@ -18,6 +18,9 @@ struct Channel {
     bool remote_eof_received;
     bool remote_close_received;
     bool local_close_sent;
+
+    bool exit_status_received;
+    uint32_t exit_status;
 };
 
 struct ChannelOpenFailure {
@@ -79,7 +82,7 @@ public:
     void parse_channel_eof(const std::vector<uint8_t>& payload, Channel& channel) const;
 
     //Parses the "exit-status" SSH_MSG_CHANNEL_REQUEST.
-    ChannelExitStatus parse_exit_status(const std::vector<uint8_t>& payload, const Channel& channel) const;
+    ChannelExitStatus parse_exit_status(const std::vector<uint8_t>& payload, Channel& channel) const;
 
     //Parse SSH_MSG_CHANNEL_CLOSE requests
     void parse_channel_close(const std::vector<uint8_t>& payload, Channel& channel) const;
