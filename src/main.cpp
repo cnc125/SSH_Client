@@ -1,5 +1,6 @@
 #include "socket/socket.hpp"
 #include "transport/transport.hpp"
+#include "connection/connection.hpp"
 #include "auth/auth.hpp"
 #include "kex/kex.hpp"
 #include "terminal/terminal.hpp"
@@ -215,8 +216,43 @@ int main() {
             throw std::runtime_error("Password authentication rejected");
         }
         else {
-            throw std::runtime_error("Unexpected response");
+            throw std::runtime_error("Unexpected response - authentication");
         }
+
+        Connection connection;
+        Channel channel{};
+        channel.local_id = 0;
+        channel.local_window = 1024 * 1024;
+        channel.local_max_packet = 32 * 1024;
+
+        transport.send_packet(connection.create_session_open(channel));
+
+        while (!channel.open) {
+            auto session_open_response = transport.receive_packet();
+            if (session_open_response.size() == 0) {
+                throw std::runtime_error("Packet contained 0 bytes");
+            }
+
+            if (session_open_response[0] == 91) {
+                connection.parse_open_confirmation(session_open_response, channel);
+                std::cout << "Connection opened\n";
+            }
+            else if (session_open_response[0] == 92) {
+                ChannelOpenFailure failure = connection.parse_open_failure(session_open_response, channel);
+                throw std::runtime_error("Connection failed to open");
+            }
+            else if (session_open_response[0] == 80) {
+                GlobalRequest gr = connection.parse_global_request(session_open_response);
+                std::cout << "Received SSH_MSG_GLOBAL_REQUEST: " << gr.request_name << "\n";
+                if (gr.want_reply) {
+                    transport.send_packet(connection.create_request_failure());
+                }
+            }
+            else {
+                throw std::runtime_error("Unexpected response - connection open");
+            }
+        }
+        
   
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";

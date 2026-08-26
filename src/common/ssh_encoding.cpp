@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
-#include <cstdint>
 
 namespace {
 constexpr std::size_t bits_per_byte = 8;
@@ -61,5 +60,22 @@ std::vector<uint8_t> read_string(const std::vector<uint8_t>& payload, std::size_
     position += length;
     return result;
 }
+
+uint32_t read_uint32(const std::vector<uint8_t>& payload, std::size_t& position) {
+    if (position > payload.size()) {
+        throw std::runtime_error("No bytes remain");
+    }
+
+    if (payload.size() - position < uint32_bytes) {
+        throw std::runtime_error("Expected 4 bytes");
+    }
+
+    std::array<uint8_t, uint32_bytes> bytes{};
+    std::copy_n(payload.begin() + position, uint32_bytes, bytes.begin());
+    position += uint32_bytes;
+    return decode_uint32(bytes);
+}
+
+
 
 }
