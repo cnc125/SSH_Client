@@ -14,11 +14,10 @@
 #include <algorithm>
 #include <cerrno>
 #include "known_hosts/known_hosts.hpp"
+#include "common/ssh_messages.hpp"
 #include <cstdlib>
 
 namespace {
-    constexpr uint8_t SSH_MSG_KEXINIT = 20;
-    constexpr uint8_t SSH_MSG_NEWKEYS = 21;
     constexpr uint32_t LOCAL_WINDOW_TARGET = 1024 * 1024;
     constexpr uint32_t LOCAL_WINDOW_THRESHOLD = 512 * 1024;
 }
@@ -86,10 +85,10 @@ KexInit receive_kexinit(Transport& transport) {
     if (payload.empty()) {
         throw std::runtime_error("SSH Packet is empty");
     }
-    if (payload[0] != SSH_MSG_KEXINIT) {
+    if (payload[0] != ssh_message::KEXINIT) {
         throw std::runtime_error("SSH Packet doesn't contain expected KEX information");
     }
-    std::cout << "Received message 20\n";
+    std::cout << "Received SSH_MSG_KEXINIT\n";
     Kex kex;
     KexInit server_kexinit = kex.parse_kexinit(payload);
     return server_kexinit;
@@ -112,15 +111,15 @@ void open_session_channel(Connection& connection, Transport& transport, Channel&
             throw std::runtime_error("Packet contained 0 bytes");
         }
 
-        if (session_open_response[0] == 91) {
+        if (session_open_response[0] == ssh_message::CHANNEL_OPEN_CONFIRMATION) {
             connection.parse_open_confirmation(session_open_response, channel);
             std::cout << "Connection opened\n";
         }
-        else if (session_open_response[0] == 92) {
+        else if (session_open_response[0] == ssh_message::CHANNEL_OPEN_FAILURE) {
             ChannelOpenFailure failure = connection.parse_open_failure(session_open_response, channel);
             throw std::runtime_error("Connection failed to open");
         }
-        else if (session_open_response[0] == 80) {
+        else if (session_open_response[0] == ssh_message::GLOBAL_REQUEST) {
             handle_global_request(session_open_response, connection, transport);
         } else {
             throw std::runtime_error("Unexpected response received during session channel opening");
@@ -137,19 +136,19 @@ void wait_for_channel_request_result(Connection& connection, Transport& transpor
             throw std::runtime_error("Packet contained 0 bytes");
         }
         
-        if (command_response[0] == 99) {
+        if (command_response[0] == ssh_message::CHANNEL_SUCCESS) {
             connection.validate_channel_success(command_response, channel);
             std::cout << request_name + " request accepted\n";
             request_accepted = true;
         }
-        else if (command_response[0] == 100) {
+        else if (command_response[0] == ssh_message::CHANNEL_FAILURE) {
             connection.validate_channel_failure(command_response, channel);
             throw std::runtime_error(request_name + " request rejected");
         }
-        else if (command_response[0] == 80) {
+        else if (command_response[0] == ssh_message::GLOBAL_REQUEST) {
             handle_global_request(command_response, connection, transport);
         }
-        else if (command_response[0] == 93) {
+        else if (command_response[0] == ssh_message::CHANNEL_WINDOW_ADJUST) {
             connection.parse_window_adjust(command_response, channel);
         }
         else {
@@ -174,27 +173,27 @@ uint32_t process_command_messages(Connection& connection, Transport& transport, 
 
         uint8_t message_type = response[0];
 
-        if (message_type == 94) {
+        if (message_type == ssh_message::CHANNEL_DATA) {
             std::vector<uint8_t> data = connection.parse_channel_data(response, channel);
             std::cout.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
             std::cout.flush();
             consumed_local_window = true;
         }
-        else if (message_type == 93) {
+        else if (message_type == ssh_message::CHANNEL_WINDOW_ADJUST) {
             connection.parse_window_adjust(response, channel);
         }
-        else if (message_type == 80) {
+        else if (message_type == ssh_message::GLOBAL_REQUEST) {
             handle_global_request(response, connection, transport);
         }
-        else if (message_type == 96) {
+        else if (message_type == ssh_message::CHANNEL_EOF) {
             connection.parse_channel_eof(response, channel);
             std::cout << "EOF received\n";
         }
-        else if (message_type == 98) {
+        else if (message_type == ssh_message::CHANNEL_REQUEST) {
             ChannelExitStatus channel_exit_status = connection.parse_exit_status(response, channel);
             std::cout << "Remote exit status: " << channel_exit_status.exit_status << "\n";
         }
-        else if (message_type == 97) {
+        else if (message_type == ssh_message::CHANNEL_CLOSE) {
             connection.parse_channel_close(response, channel);
             if (!channel.local_close_sent) {
                 transport.send_packet(connection.create_channel_close(channel));
@@ -206,7 +205,7 @@ uint32_t process_command_messages(Connection& connection, Transport& transport, 
                 std::cout << "Channel closed successfully\n";
             }
         }
-        else if (message_type == 95) {
+        else if (message_type == ssh_message::CHANNEL_EXTENDED_DATA) {
             ChannelExtendedData channel_extended_data = connection.parse_channel_extended_data(response, channel);
             std::cerr.write(reinterpret_cast<const char*>(channel_extended_data.data.data()),static_cast<std::streamsize>(channel_extended_data.data.size()));
             std::cerr.flush();
@@ -291,25 +290,25 @@ void run_interactive_shell(Socket& sock, Connection& connection, Transport& tran
             uint8_t message_type = response[0];
             bool consumed_local_window = false;
 
-            if (message_type == 94) {
+            if (message_type == ssh_message::CHANNEL_DATA) {
                 std::vector<uint8_t> data = connection.parse_channel_data(response, channel);
                 std::cout.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
                 std::cout.flush();
                 consumed_local_window = true;
-            } else if (message_type == 93) {
+            } else if (message_type == ssh_message::CHANNEL_WINDOW_ADJUST) {
                 connection.parse_window_adjust(response, channel);
-            } else if (message_type == 80) {
+            } else if (message_type == ssh_message::GLOBAL_REQUEST) {
                 handle_global_request(response, connection, transport);
-            } else if (message_type == 95) {
+            } else if (message_type == ssh_message::CHANNEL_EXTENDED_DATA) {
                 ChannelExtendedData extended = connection.parse_channel_extended_data(response, channel);
                 std::cerr.write(reinterpret_cast<const char*>(extended.data.data()), static_cast<std::streamsize>(extended.data.size()));
                 std::cerr.flush();
                 consumed_local_window = true;
-            } else if (message_type == 96) {
+            } else if (message_type == ssh_message::CHANNEL_EOF) {
                 connection.parse_channel_eof(response, channel);
-            } else if (message_type == 98) {
+            } else if (message_type == ssh_message::CHANNEL_REQUEST) {
                 connection.parse_exit_status(response, channel);
-            } else if (message_type == 97) {
+            } else if (message_type == ssh_message::CHANNEL_CLOSE) {
                 connection.parse_channel_close(response, channel);
                 if (!channel.local_close_sent) {
                     transport.send_packet(
@@ -393,7 +392,7 @@ int main() {
         if (reply.empty()) {
             throw std::runtime_error("Empty SSH reply");
         }
-        if (reply[0] != 31) {
+        if (reply[0] != ssh_message::KEX_ECDH_REPLY) {
             throw std::runtime_error("Expected an SSH_MSG_KEX_ECDH_REPLY");
         } else {
             std::cout << "Received SSH_MSG_KEX_ECDH_REPLY\n";
@@ -441,7 +440,7 @@ int main() {
 
         //send NEWKEYS
         std::vector<uint8_t> payload_newkeys{};
-        payload_newkeys.push_back(SSH_MSG_NEWKEYS);
+        payload_newkeys.push_back(ssh_message::NEWKEYS);
         transport.send_packet(payload_newkeys);
         transport.enable_outgoing_encryption(transport_keys.iv_cs, transport_keys.encryption_key_cs, transport_keys.mac_key_cs);
 
@@ -450,7 +449,7 @@ int main() {
         if (server_newkeys.size() != 1) {
             throw std::runtime_error("Expected a packet of length 1 byte");
         }
-        if (server_newkeys[0] != SSH_MSG_NEWKEYS) {
+        if (server_newkeys[0] != ssh_message::NEWKEYS) {
             throw std::runtime_error("Expected a SSH_MSG_NEWKEYS packet");
         }
         std::cout << "NEWKEYS exchange completed" << "\n";
@@ -480,11 +479,11 @@ int main() {
         if (auth_response.size() == 0) {
             throw std::runtime_error("Packet contained 0 bytes");
         }
-        if (auth_response[0] == 52) {
+        if (auth_response[0] == ssh_message::USERAUTH_SUCCESS) {
             auth.validate_auth_success(auth_response);
             std::cout << "Authentication Complete\n";
         }
-        else if (auth_response[0] == 51) {
+        else if (auth_response[0] == ssh_message::USERAUTH_FAILURE) {
             auth.parse_auth_failure(auth_response);
             throw std::runtime_error("Password authentication rejected");
         }
