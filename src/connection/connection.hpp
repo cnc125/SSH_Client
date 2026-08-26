@@ -95,6 +95,9 @@ public:
 
     //Create window adjust requests
     std::vector<uint8_t> create_window_adjust(const Channel& channel, uint32_t bytes_to_add) const;
+
+    //Create PTY request payload
+    std::vector<uint8_t> create_pty_request(const Channel& channel, const std::string& terminal_type, uint32_t columns, uint32_t rows) const;
 private:
 
 };

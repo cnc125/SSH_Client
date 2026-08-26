@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <iostream>
 #include <stdexcept>
+#include <sys/ioctl.h>
+#include <cstdlib>
 
 std::string Terminal::read_hidden_input(const std::string& prompt) {
     std::cout << prompt << std::flush;
@@ -32,5 +34,32 @@ std::string Terminal::read_hidden_input(const std::string& prompt) {
     std::cout << "\n";
 
     return password;
+
+}
+
+TerminalInfo Terminal::get_terminal_info() const {
+    TerminalInfo info{};
+    const char* term_value = std::getenv("TERM");
+
+    if (term_value == nullptr || term_value[0] == '\0') {
+        info.type = "xterm-256color";
+    } else {
+        info.type = term_value;
+    }
+
+    //fallback values
+    info.columns = 80;
+    info.rows = 24;
+
+    winsize dimensions{};
+    int result = ioctl(STDIN_FILENO, TIOCGWINSZ, &dimensions);
+
+    if (result != -1 && dimensions.ws_col != 0 && dimensions.ws_row != 0) {
+        info.columns = dimensions.ws_col;
+        info.rows = dimensions.ws_row;
+    }
+
+    return info;
+    
 
 }

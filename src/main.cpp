@@ -122,12 +122,10 @@ void open_session_channel(Connection& connection, Transport& transport, Channel&
     }
 }
 
-void request_exec(Connection& connection, Transport& transport, Channel& channel, const std::string& command) {
-    transport.send_packet(connection.create_exec_request(channel, command));
+void wait_for_channel_request_result(Connection& connection, Transport& transport, Channel& channel, const std::string& request_name) {
+    bool request_accepted = false;
 
-    bool exec_accepted = false;
-
-    while (!exec_accepted) {
+    while (!request_accepted) {
         auto command_response = transport.receive_packet();
         if (command_response.size() == 0) {
             throw std::runtime_error("Packet contained 0 bytes");
@@ -135,12 +133,12 @@ void request_exec(Connection& connection, Transport& transport, Channel& channel
         
         if (command_response[0] == 99) {
             connection.validate_channel_success(command_response, channel);
-            std::cout << "Channel Success\n";
-            exec_accepted = true;
+            std::cout << request_name + " request accepted\n";
+            request_accepted = true;
         }
         else if (command_response[0] == 100) {
             connection.validate_channel_failure(command_response, channel);
-            throw std::runtime_error("Channel Failure");
+            throw std::runtime_error(request_name + " request rejected");
         }
         else if (command_response[0] == 80) {
             handle_global_request(command_response, connection, transport);
@@ -149,9 +147,15 @@ void request_exec(Connection& connection, Transport& transport, Channel& channel
             connection.parse_window_adjust(command_response, channel);
         }
         else {
-            throw std::runtime_error("Unexpected response received during command execution");
+            throw std::runtime_error("Unexpected response received while waiting for " + request_name);
         }
     }
+}
+
+
+void request_exec(Connection& connection, Transport& transport, Channel& channel, const std::string& command) {
+    transport.send_packet(connection.create_exec_request(channel, command));
+    wait_for_channel_request_result(connection, transport, channel, "exec");
 }
 
 uint32_t process_command_messages(Connection& connection, Transport& transport, Channel& channel) {
@@ -217,6 +221,11 @@ uint32_t process_command_messages(Connection& connection, Transport& transport, 
         throw std::runtime_error("No exit status available");
     }
     return channel.exit_status;
+}
+
+void request_pty(Connection& connection, Transport& transport, Channel& channel, const TerminalInfo& terminal_info) {
+    transport.send_packet(connection.create_pty_request(channel, terminal_info.type, terminal_info.columns, terminal_info.rows));
+    wait_for_channel_request_result(connection, transport, channel, "pty-req");
 }
 
 int main() {
@@ -360,6 +369,8 @@ int main() {
         channel.local_max_packet = 32 * 1024;
 
         open_session_channel(connection, transport, channel);
+        TerminalInfo terminal_info = terminal.get_terminal_info();
+        request_pty(connection, transport, channel, terminal_info);
         request_exec(connection, transport, channel, "ls SSH-Cli");
         uint32_t remote_status = process_command_messages(connection, transport, channel);
         
