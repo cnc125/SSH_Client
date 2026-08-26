@@ -11,7 +11,8 @@ SRCS     = src/main.cpp \
            src/kex/kex.cpp \
            src/auth/auth.cpp \
            src/connection/connection.cpp \
-           src/terminal/terminal.cpp
+           src/terminal/terminal.cpp \
+           src/known_hosts/known_hosts.cpp
 
 OBJS     = $(SRCS:.cpp=.o)
 
