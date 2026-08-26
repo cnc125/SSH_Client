@@ -13,6 +13,8 @@
 namespace {
     constexpr uint8_t SSH_MSG_KEXINIT = 20;
     constexpr uint8_t SSH_MSG_NEWKEYS = 21;
+    constexpr uint32_t LOCAL_WINDOW_TARGET = 1024 * 1024;
+    constexpr uint32_t LOCAL_WINDOW_THRESHOLD = 512 * 1024;
 }
 
 struct IdentificationExchange {
@@ -222,7 +224,7 @@ int main() {
         Connection connection;
         Channel channel{};
         channel.local_id = 0;
-        channel.local_window = 1024 * 1024;
+        channel.local_window = LOCAL_WINDOW_TARGET;
         channel.local_max_packet = 32 * 1024;
 
         transport.send_packet(connection.create_session_open(channel));
@@ -252,7 +254,7 @@ int main() {
                 throw std::runtime_error("Unexpected response - connection open");
             }
         }
-        transport.send_packet(connection.create_exec_request(channel, "ls"));
+        transport.send_packet(connection.create_exec_request(channel, "ls /directory-that-does-not-exist"));
 
         bool exec_accepted = false;
 
@@ -291,6 +293,7 @@ int main() {
 
         while (channel.open) {
             std::vector<uint8_t> response = transport.receive_packet();
+            bool consumed_local_window = false;
             if (response.size() == 0) {
                 throw std::runtime_error("Packet contained 0 bytes");
             }
@@ -301,6 +304,7 @@ int main() {
                 std::vector<uint8_t> data = connection.parse_channel_data(response, channel);
                 std::cout.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
                 std::cout.flush();
+                consumed_local_window = true;
             }
             else if (message_type == 93) {
                 connection.parse_window_adjust(response, channel);
@@ -332,9 +336,22 @@ int main() {
                     std::cout << "Channel closed successfully\n";
                 }
             }
+            else if (message_type == 95) {
+                ChannelExtendedData channel_extended_data = connection.parse_channel_extended_data(response, channel);
+                std::cerr.write(reinterpret_cast<const char*>(channel_extended_data.data.data()),static_cast<std::streamsize>(channel_extended_data.data.size()));
+                std::cerr.flush();
+                consumed_local_window = true;
+            }
             else {
                 std::cout << "\nNext unhandled message: "<< static_cast<int>(message_type) << '\n';
                 break;
+            }
+
+            if (consumed_local_window && channel.open && channel.local_window <= LOCAL_WINDOW_THRESHOLD) {
+                uint32_t difference = LOCAL_WINDOW_TARGET - channel.local_window;
+                auto adjust_packet = connection.create_window_adjust(channel, difference);
+                transport.send_packet(adjust_packet);
+                channel.local_window += difference;
             }
         }
         

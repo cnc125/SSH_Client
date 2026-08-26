@@ -37,6 +37,11 @@ struct ChannelExitStatus {
     bool want_reply;
 };
 
+struct ChannelExtendedData {
+    uint32_t data_type;
+    std::vector<uint8_t> data;
+};
+
 class Connection {
 public:
 
@@ -81,6 +86,12 @@ public:
 
     //Create channel close payload
     std::vector<uint8_t> create_channel_close(const Channel& channel) const;
+
+    //Parse SSH_MSG_CHANNEL_EXTENDED_DATA
+    ChannelExtendedData parse_channel_extended_data(const std::vector<uint8_t>& payload, Channel& channel) const;
+
+    //Create window adjust requests
+    std::vector<uint8_t> create_window_adjust(const Channel& channel, uint32_t bytes_to_add) const;
 private:
 
 };

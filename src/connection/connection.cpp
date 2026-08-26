@@ -19,6 +19,7 @@ namespace {
     constexpr uint8_t SSH_MSG_CHANNEL_DATA = 94;
     constexpr uint8_t SSH_MSG_CHANNEL_EOF = 96;
     constexpr uint8_t SSH_MSG_CHANNEL_CLOSE = 97;
+    constexpr uint8_t SSH_MSG_CHANNEL_EXTENDED_DATA = 95;
 
     constexpr uint32_t MIN_MAX_PACKET_SIZE = 32768;
 }
@@ -382,5 +383,69 @@ std::vector<uint8_t> Connection::create_channel_close(const Channel& channel) co
     payload.push_back(SSH_MSG_CHANNEL_CLOSE);
     auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
     payload.insert(payload.end(), remote_id.begin(), remote_id.end());
+    return payload;
+}
+
+ChannelExtendedData Connection::parse_channel_extended_data(const std::vector<uint8_t>& payload, Channel& channel) const {
+    if (!channel.open) {
+        throw std::runtime_error("Extended data received for a closed channel");
+    }
+
+    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_EXTENDED_DATA) {
+        throw std::runtime_error("Expected SSH_MSG_EXTENDED_DATA");
+    }
+
+    std::size_t position = 1;
+    uint32_t recipient_channel = ssh_encoding::read_uint32(payload, position);
+    if (recipient_channel != channel.local_id) {
+        throw std::runtime_error("Channel ids did not match");
+    }
+    uint32_t data_type_code = ssh_encoding::read_uint32(payload, position);
+    if (data_type_code != 1) {
+        throw std::runtime_error("Unexpected data type code received");
+    }
+
+    auto data = ssh_encoding::read_string(payload, position);
+
+    if (position != payload.size()) {
+        throw std::runtime_error("Payload contains more bytes than expected");
+    }
+
+    if (data.size() > channel.local_max_packet) {
+        throw std::runtime_error("Channel data exceeds local maximum packet size");
+    }
+
+    if (data.size() > channel.local_window) {
+        throw std::runtime_error("Data received exceeds maximum allowed size");
+    }
+
+    channel.local_window -= data.size();
+
+    ChannelExtendedData channel_extended_data{};
+    channel_extended_data.data_type = data_type_code;
+    channel_extended_data.data = data;
+
+    return channel_extended_data;
+}
+
+std::vector<uint8_t> Connection::create_window_adjust(const Channel& channel, uint32_t bytes_to_add) const {
+    if (!channel.open) {
+        throw std::runtime_error("Channel already closed");
+    }
+    
+    if (bytes_to_add == 0) {
+        throw std::runtime_error("Must add a positive number of bytes");
+    }
+
+    std::vector<uint8_t> payload;
+    payload.push_back(SSH_MSG_CHANNEL_WINDOW_ADJUST);
+    auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
+    payload.insert(payload.end(), remote_id.begin(), remote_id.end());
+
+    if (channel.local_window > std::numeric_limits<uint32_t>::max() - bytes_to_add) {
+        throw std::runtime_error("Local channel window overflow");
+    }
+    auto bytes_arr = ssh_encoding::encode_uint32(bytes_to_add);
+    payload.insert(payload.end(), bytes_arr.begin(), bytes_arr.end());
     return payload;
 }
