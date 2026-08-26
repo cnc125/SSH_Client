@@ -98,6 +98,12 @@ public:
 
     //Create PTY request payload
     std::vector<uint8_t> create_pty_request(const Channel& channel, const std::string& terminal_type, uint32_t columns, uint32_t rows) const;
+
+    //Create payload to request for shell
+    std::vector<uint8_t> create_shell_request(const Channel& channel) const;
+
+    //Creates a payload to send keyboard bytes to the remote shell
+    std::vector<uint8_t> create_channel_data(const Channel& channel, const std::vector<uint8_t>& data) const;
 private:
 
 };
