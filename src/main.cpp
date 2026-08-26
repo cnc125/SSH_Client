@@ -5,6 +5,8 @@
 #include "kex/kex.hpp"
 #include "terminal/terminal.hpp"
 #include <iostream>
+#include <array>
+#include <cstddef>
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -18,8 +20,25 @@
 #include <cstdlib>
 
 namespace {
+    struct ClientConfig {
+        std::string hostname = "127.0.0.1";
+        uint16_t port = 22;
+        std::string username = "cnc125";
+        std::string identification = "SSH-2.0-ConorSSH_0.1";
+        std::string known_hosts_relative_path = "/.conorssh/known_hosts";
+    };
+
     constexpr uint32_t LOCAL_WINDOW_TARGET = 1024 * 1024;
     constexpr uint32_t LOCAL_WINDOW_THRESHOLD = 512 * 1024;
+    constexpr uint32_t LOCAL_MAX_PACKET_SIZE = 32 * 1024;
+    constexpr uint32_t INITIAL_CHANNEL_ID = 0;
+    constexpr std::size_t SHA256_DIGEST_SIZE = 32;
+    constexpr std::size_t KEYBOARD_BUFFER_SIZE = 1024;
+    constexpr std::size_t KEYBOARD_INPUT_INDEX = 0;
+    constexpr std::size_t SOCKET_INPUT_INDEX = 1;
+    constexpr std::size_t POLL_INPUT_COUNT = 2;
+    constexpr int POLL_WAIT_INDEFINITELY = -1;
+    constexpr std::size_t NEWKEYS_PAYLOAD_SIZE = 1;
 }
 
 struct IdentificationExchange {
@@ -27,7 +46,7 @@ struct IdentificationExchange {
     std::string server;
 };
 
-std::string format_sha256_fingerprint(const std::array<uint8_t, 32>& fingerprint) {
+std::string format_sha256_fingerprint(const std::array<uint8_t, SHA256_DIGEST_SIZE>& fingerprint) {
     std::size_t encoded_size = sodium_base64_ENCODED_LEN(fingerprint.size(), sodium_base64_VARIANT_ORIGINAL_NO_PADDING);
     std::vector<char> encoded(encoded_size);
     sodium_bin2base64(encoded.data(), encoded.size(), fingerprint.data(), fingerprint.size(), sodium_base64_VARIANT_ORIGINAL_NO_PADDING);
@@ -48,7 +67,7 @@ std::string read_version(Socket& sock) {
 }
 
 //exchange identification strings with the server
-IdentificationExchange exchange_identification(Socket &sock) {
+IdentificationExchange exchange_identification(Socket &sock, const std::string& client_version) {
 
     IdentificationExchange id_exchange{};
 
@@ -59,7 +78,6 @@ IdentificationExchange exchange_identification(Socket &sock) {
     if (server_version.substr(0, 7) != "SSH-2.0")
         throw std::runtime_error("Not SSH-2.0: " + server_version);
 
-    std::string client_version = "SSH-2.0-ConorSSH_0.1";
     id_exchange.client = client_version;
     std::string line = client_version + "\r\n";
     std::vector<uint8_t> bytes(line.begin(), line.end());
@@ -107,7 +125,7 @@ void open_session_channel(Connection& connection, Transport& transport, Channel&
 
     while (!channel.open) {
         auto session_open_response = transport.receive_packet();
-        if (session_open_response.size() == 0) {
+        if (session_open_response.empty()) {
             throw std::runtime_error("Packet contained 0 bytes");
         }
 
@@ -132,7 +150,7 @@ void wait_for_channel_request_result(Connection& connection, Transport& transpor
 
     while (!request_accepted) {
         auto command_response = transport.receive_packet();
-        if (command_response.size() == 0) {
+        if (command_response.empty()) {
             throw std::runtime_error("Packet contained 0 bytes");
         }
         
@@ -157,77 +175,6 @@ void wait_for_channel_request_result(Connection& connection, Transport& transpor
     }
 }
 
-
-void request_exec(Connection& connection, Transport& transport, Channel& channel, const std::string& command) {
-    transport.send_packet(connection.create_exec_request(channel, command));
-    wait_for_channel_request_result(connection, transport, channel, "exec");
-}
-
-uint32_t process_command_messages(Connection& connection, Transport& transport, Channel& channel) {
-    while (channel.open) {
-        std::vector<uint8_t> response = transport.receive_packet();
-        bool consumed_local_window = false;
-        if (response.size() == 0) {
-            throw std::runtime_error("Packet contained 0 bytes");
-        }
-
-        uint8_t message_type = response[0];
-
-        if (message_type == ssh_message::CHANNEL_DATA) {
-            std::vector<uint8_t> data = connection.parse_channel_data(response, channel);
-            std::cout.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-            std::cout.flush();
-            consumed_local_window = true;
-        }
-        else if (message_type == ssh_message::CHANNEL_WINDOW_ADJUST) {
-            connection.parse_window_adjust(response, channel);
-        }
-        else if (message_type == ssh_message::GLOBAL_REQUEST) {
-            handle_global_request(response, connection, transport);
-        }
-        else if (message_type == ssh_message::CHANNEL_EOF) {
-            connection.parse_channel_eof(response, channel);
-            std::cout << "EOF received\n";
-        }
-        else if (message_type == ssh_message::CHANNEL_REQUEST) {
-            ChannelExitStatus channel_exit_status = connection.parse_exit_status(response, channel);
-            std::cout << "Remote exit status: " << channel_exit_status.exit_status << "\n";
-        }
-        else if (message_type == ssh_message::CHANNEL_CLOSE) {
-            connection.parse_channel_close(response, channel);
-            if (!channel.local_close_sent) {
-                transport.send_packet(connection.create_channel_close(channel));
-                channel.local_close_sent = true;
-            }
-            
-            if (channel.local_close_sent && channel.remote_close_received) {
-                channel.open = false;
-                std::cout << "Channel closed successfully\n";
-            }
-        }
-        else if (message_type == ssh_message::CHANNEL_EXTENDED_DATA) {
-            ChannelExtendedData channel_extended_data = connection.parse_channel_extended_data(response, channel);
-            std::cerr.write(reinterpret_cast<const char*>(channel_extended_data.data.data()),static_cast<std::streamsize>(channel_extended_data.data.size()));
-            std::cerr.flush();
-            consumed_local_window = true;
-        }
-        else {
-            throw std::runtime_error("Unexpected message received when processing command");
-        }
-
-        if (consumed_local_window && channel.open && channel.local_window <= LOCAL_WINDOW_THRESHOLD) {
-            uint32_t difference = LOCAL_WINDOW_TARGET - channel.local_window;
-            auto adjust_packet = connection.create_window_adjust(channel, difference);
-            transport.send_packet(adjust_packet);
-            channel.local_window += difference;
-        }
-    }
-    if (!channel.exit_status_received) {
-        throw std::runtime_error("No exit status available");
-    }
-    return channel.exit_status;
-}
-
 void request_pty(Connection& connection, Transport& transport, Channel& channel, const TerminalInfo& terminal_info) {
     transport.send_packet(connection.create_pty_request(channel, terminal_info.type, terminal_info.columns, terminal_info.rows));
     wait_for_channel_request_result(connection, transport, channel, "pty-req");
@@ -240,21 +187,20 @@ void request_shell(Connection& connection, Transport& transport, Channel& channe
 
 void run_interactive_shell(Socket& sock, Connection& connection, Transport& transport, Channel& channel, Terminal& terminal) {
     terminal.enable_raw_mode();
-    pollfd inputs[2]{};
-    inputs[0].fd = STDIN_FILENO;
-    inputs[0].events = POLLIN;
-    inputs[1].fd = sock.get_fd();
-    inputs[1].events = POLLIN;
+    pollfd inputs[POLL_INPUT_COUNT]{};
+    inputs[KEYBOARD_INPUT_INDEX].fd = STDIN_FILENO;
+    inputs[KEYBOARD_INPUT_INDEX].events = POLLIN;
+    inputs[SOCKET_INPUT_INDEX].fd = sock.get_fd();
+    inputs[SOCKET_INPUT_INDEX].events = POLLIN;
 
     while (channel.open) {
         if (channel.remote_window > 0) {
-            inputs[0].events = POLLIN;
+            inputs[KEYBOARD_INPUT_INDEX].events = POLLIN;
         } else {
-            inputs[0].events = 0;
+            inputs[KEYBOARD_INPUT_INDEX].events = 0;
         }
-        // 2 = 2 INPUTS
-        // -1 = wait indefinitely
-        int read_count = poll(inputs, 2, -1);
+        // Wait until keyboard or socket input is ready.
+        int read_count = poll(inputs, POLL_INPUT_COUNT, POLL_WAIT_INDEFINITELY);
 
         if (read_count == -1) {
             if (errno == EINTR) {
@@ -263,8 +209,8 @@ void run_interactive_shell(Socket& sock, Connection& connection, Transport& tran
             throw std::runtime_error("poll failed");
         }
 
-        if (inputs[0].revents & POLLIN) {
-            std::array<uint8_t, 1024> keyboard_buffer{};
+        if (inputs[KEYBOARD_INPUT_INDEX].revents & POLLIN) {
+            std::array<uint8_t, KEYBOARD_BUFFER_SIZE> keyboard_buffer{};
 
             std::size_t max_read = keyboard_buffer.size();
 
@@ -282,7 +228,7 @@ void run_interactive_shell(Socket& sock, Connection& connection, Transport& tran
                 channel.remote_window -= keyboard_data.size();
             }
         }
-        if (inputs[1].revents & POLLIN) {
+        if (inputs[SOCKET_INPUT_INDEX].revents & POLLIN) {
             std::vector<uint8_t> response = transport.receive_packet();
             if (response.empty()) {
                 throw std::runtime_error("Received an empty SSH packet");
@@ -329,7 +275,7 @@ void run_interactive_shell(Socket& sock, Connection& connection, Transport& tran
                 channel.open = false;
             }
         }
-        if (channel.open && (inputs[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+        if (channel.open && (inputs[SOCKET_INPUT_INDEX].revents & (POLLERR | POLLHUP | POLLNVAL))) {
             throw std::runtime_error("SSH socket closed unexpectedly");
         }
     }
@@ -385,12 +331,12 @@ void perform_key_exchange(Transport& transport, const IdentificationExchange& id
     kex.calculate_shared_secret(keypair, ecdh_reply.server_public_key);
     std::cout << "Shared secret calculated successfully\n";
 
-    std::array<uint8_t, 32> exchange_hash = kex.calculate_exchange_hash(id.client, id.server, client_kexinit, server_kexinit, keypair, ecdh_reply);
+    std::array<uint8_t, SHA256_DIGEST_SIZE> exchange_hash = kex.calculate_exchange_hash(id.client, id.server, client_kexinit, server_kexinit, keypair, ecdh_reply);
 
     Ed25519VerificationData verification_data = kex.parse_ed25519_verification_data(ecdh_reply, algorithms.host_key_algorithm);
 
     kex.verify_ed25519_signature(verification_data, exchange_hash);
-    std::array<uint8_t, 32> fingerprint = kex.calculate_host_key_fingerprint(ecdh_reply.server_host_key);
+    std::array<uint8_t, SHA256_DIGEST_SIZE> fingerprint = kex.calculate_host_key_fingerprint(ecdh_reply.server_host_key);
 
     std::string fingerprint_text = format_sha256_fingerprint(fingerprint);
     HostKeyStatus host_status = known_hosts.check(hostname, algorithms.host_key_algorithm, ecdh_reply.server_host_key);
@@ -418,7 +364,7 @@ void perform_key_exchange(Transport& transport, const IdentificationExchange& id
         std::cout << "Host key saved\n";
     }
 
-    std::array<uint8_t, 32> session_id = exchange_hash;
+    std::array<uint8_t, SHA256_DIGEST_SIZE> session_id = exchange_hash;
 
     TransportKeyMaterial transport_keys = kex.derive_transport_keys(keypair.shared_secret, exchange_hash, session_id);
 
@@ -430,7 +376,7 @@ void perform_key_exchange(Transport& transport, const IdentificationExchange& id
 
     //get server NEWKEYS response
     std::vector<uint8_t> server_newkeys = transport.receive_packet();
-    if (server_newkeys.size() != 1) {
+    if (server_newkeys.size() != NEWKEYS_PAYLOAD_SIZE) {
         throw std::runtime_error("Expected a packet of length 1 byte");
     }
     if (server_newkeys[0] != ssh_message::NEWKEYS) {
@@ -441,7 +387,7 @@ void perform_key_exchange(Transport& transport, const IdentificationExchange& id
 }
 
 // Authenticates the configured user with a password
-void authenticate_user(Transport& transport, Terminal& terminal) {
+void authenticate_user(Transport& transport, Terminal& terminal, const std::string& username) {
     //authentication
     Auth auth;
     std::vector<uint8_t> payload = auth.create_service_request();
@@ -452,17 +398,17 @@ void authenticate_user(Transport& transport, Terminal& terminal) {
 
     std::cout << "User authentication service accepted\n";
 
-    transport.send_packet(auth.create_none_auth_request("cnc125"));
+    transport.send_packet(auth.create_none_auth_request(username));
     AuthFailure auth_failure = auth.parse_auth_failure(transport.receive_packet());
 
     std::cout << "Available Methods: " << auth_failure.available_methods << "\n";
     std::cout << "Partial Success: " << auth_failure.partial_success << "\n";
 
     std::string password = terminal.read_hidden_input("Password: ");
-    std::vector<uint8_t> auth_request = auth.create_password_auth_request("cnc125", password);
+    std::vector<uint8_t> auth_request = auth.create_password_auth_request(username, password);
     transport.send_packet(auth_request);
     auth_response = transport.receive_packet();
-    if (auth_response.size() == 0) {
+    if (auth_response.empty()) {
         throw std::runtime_error("Packet contained 0 bytes");
     }
     if (auth_response[0] == ssh_message::USERAUTH_SUCCESS) {
@@ -484,9 +430,9 @@ void run_connection_session(Socket& sock, Transport& transport, Terminal& termin
     //CONNECTION LAYER
     Connection connection;
     Channel channel{};
-    channel.local_id = 0;
+    channel.local_id = INITIAL_CHANNEL_ID;
     channel.local_window = LOCAL_WINDOW_TARGET;
-    channel.local_max_packet = 32 * 1024;
+    channel.local_max_packet = LOCAL_MAX_PACKET_SIZE;
 
     open_session_channel(connection, transport, channel);
     TerminalInfo terminal_info = terminal.get_terminal_info();
@@ -501,27 +447,26 @@ void run_connection_session(Socket& sock, Transport& transport, Terminal& termin
 
 int main() {
     try {
+        const ClientConfig config{};
         int result = sodium_init();
         if (result == -1) {
             throw std::runtime_error("Sodium could not be initialised");
         }
-        const std::string hostname = "127.0.0.1";
-        const uint16_t port = 22;
         const char* home_directory = std::getenv("HOME");
 
         if (home_directory == nullptr) {
             throw std::runtime_error("HOME environment variable could not be accessed");
         }
-        KnownHosts known_hosts(std::string(home_directory) + "/.conorssh/known_hosts");
+        KnownHosts known_hosts(std::string(home_directory) + config.known_hosts_relative_path);
 
-        Socket sock(hostname, port);
-        IdentificationExchange id = exchange_identification(sock);
+        Socket sock(config.hostname, config.port);
+        IdentificationExchange id = exchange_identification(sock, config.identification);
 
         Transport transport(sock);
-        perform_key_exchange(transport, id, known_hosts, hostname);
+        perform_key_exchange(transport, id, known_hosts, config.hostname);
 
         Terminal terminal;
-        authenticate_user(transport, terminal);
+        authenticate_user(transport, terminal, config.username);
 
         run_connection_session(sock, transport, terminal);
   

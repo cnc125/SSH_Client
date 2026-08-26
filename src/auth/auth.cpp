@@ -12,7 +12,7 @@ std::vector<uint8_t> Auth::create_service_request() const {
 }
 
 void Auth::validate_service_accept(const std::vector<uint8_t>& payload) const {
-    if (payload.size() == 0) {
+    if (payload.empty()) {
         throw std::runtime_error("Payload cannot be empty");
     }
     if (payload[0] != ssh_message::SERVICE_ACCEPT) {
@@ -42,7 +42,7 @@ std::vector<uint8_t> Auth::create_none_auth_request(const std::string& username)
 
 AuthFailure Auth::parse_auth_failure(const std::vector<uint8_t>& payload) const {
     AuthFailure auth_failure;
-    if (payload.size() == 0) {
+    if (payload.empty()) {
         throw std::runtime_error("SSH_MSG_USERAUTH_FAILURE expected");
     }
 

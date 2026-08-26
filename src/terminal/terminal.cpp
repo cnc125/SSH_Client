@@ -6,6 +6,12 @@
 #include <sys/ioctl.h>
 #include <cstdlib>
 
+namespace {
+    constexpr uint32_t DEFAULT_TERMINAL_COLUMNS = 80;
+    constexpr uint32_t DEFAULT_TERMINAL_ROWS = 24;
+    constexpr const char* DEFAULT_TERMINAL_TYPE = "xterm-256color";
+}
+
 Terminal::Terminal() : original_settings_{}, raw_mode_active_(false) {
 }
 
@@ -54,14 +60,14 @@ TerminalInfo Terminal::get_terminal_info() const {
     const char* term_value = std::getenv("TERM");
 
     if (term_value == nullptr || term_value[0] == '\0') {
-        info.type = "xterm-256color";
+        info.type = DEFAULT_TERMINAL_TYPE;
     } else {
         info.type = term_value;
     }
 
     //fallback values
-    info.columns = 80;
-    info.rows = 24;
+    info.columns = DEFAULT_TERMINAL_COLUMNS;
+    info.rows = DEFAULT_TERMINAL_ROWS;
 
     winsize dimensions{};
     int result = ioctl(STDIN_FILENO, TIOCGWINSZ, &dimensions);
