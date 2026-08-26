@@ -289,7 +289,7 @@ int main() {
             }
         }
 
-        while (true) {
+        while (channel.open) {
             std::vector<uint8_t> response = transport.receive_packet();
             if (response.size() == 0) {
                 throw std::runtime_error("Packet contained 0 bytes");
@@ -310,6 +310,26 @@ int main() {
                 std::cout << "Received SSH_MSG_GLOBAL_REQUEST: " << gr.request_name << "\n";
                 if (gr.want_reply) {
                     transport.send_packet(connection.create_request_failure());
+                }
+            }
+            else if (message_type == 96) {
+                connection.parse_channel_eof(response, channel);
+                std::cout << "EOF received\n";
+            }
+            else if (message_type == 98) {
+                ChannelExitStatus channel_exit_status = connection.parse_exit_status(response, channel);
+                std::cout << "Remote exit status: " << channel_exit_status.exit_status << "\n";
+            }
+            else if (message_type == 97) {
+                connection.parse_channel_close(response, channel);
+                if (!channel.local_close_sent) {
+                    transport.send_packet(connection.create_channel_close(channel));
+                    channel.local_close_sent = true;
+                }
+                
+                if (channel.local_close_sent && channel.remote_close_received) {
+                    channel.open = false;
+                    std::cout << "Channel closed successfully\n";
                 }
             }
             else {

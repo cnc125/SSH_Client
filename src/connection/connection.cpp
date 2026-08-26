@@ -17,6 +17,8 @@ namespace {
     constexpr uint8_t SSH_MSG_CHANNEL_FAILURE = 100;
     constexpr uint8_t SSH_MSG_CHANNEL_WINDOW_ADJUST = 93;
     constexpr uint8_t SSH_MSG_CHANNEL_DATA = 94;
+    constexpr uint8_t SSH_MSG_CHANNEL_EOF = 96;
+    constexpr uint8_t SSH_MSG_CHANNEL_CLOSE = 97;
 
     constexpr uint32_t MIN_MAX_PACKET_SIZE = 32768;
 }
@@ -269,4 +271,116 @@ std::vector<uint8_t> Connection::parse_channel_data(const std::vector<uint8_t>& 
     channel.local_window -= data_bytes.size();
 
     return data_bytes;
+}
+
+void Connection::parse_channel_eof(const std::vector<uint8_t>& payload, Channel& channel) const {
+    if (!channel.open) {
+        throw std::runtime_error("Channel data received for a closed channel");
+    }
+
+    if (channel.remote_eof_received) {
+        throw std::runtime_error("EOF already received");
+    }
+
+    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_EOF) {
+        throw std::runtime_error("Expected SSH_MSG_CHANNEL_EOF");
+    }
+
+    std::size_t position = 1;
+
+    uint32_t recipient_channel = ssh_encoding::read_uint32(payload, position);
+    if (recipient_channel != channel.local_id) {
+        throw std::runtime_error("Channel ids did not match");
+    }
+
+    if (position != payload.size()) {
+        throw std::runtime_error("No more bytes were expected");
+    }
+
+    channel.remote_eof_received = true;
+}
+
+ChannelExitStatus Connection::parse_exit_status(const std::vector<uint8_t>& payload, const Channel& channel) const {
+    if (!channel.open) {
+        throw std::runtime_error("Exit status received for a closed channel");
+    }
+
+    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_REQUEST) {
+        throw std::runtime_error("Expected SSH_MSG_CHANNEL_REQUEST");
+    }
+
+    std::size_t position = 1;
+    uint32_t recipient_channel = ssh_encoding::read_uint32(payload, position);
+    if (recipient_channel != channel.local_id) {
+        throw std::runtime_error("Channel ids did not match");
+    }
+
+    auto request_name_bytes = ssh_encoding::read_string(payload, position);
+    std::string request_name(request_name_bytes.begin(), request_name_bytes.end());
+
+    if (request_name != "exit-status") {
+        throw std::runtime_error("Expected exit-status request");
+    }
+
+    if (payload.size() - position < 1) {
+        throw std::runtime_error("want_reply value expected");
+    }
+
+    bool want_reply = payload[position] != 0;
+    position++;
+
+    uint32_t exit_status = ssh_encoding::read_uint32(payload, position);
+
+    if (position != payload.size()) {
+        throw std::runtime_error("Payload contains more bytes than expected");
+    }
+
+    ChannelExitStatus ces{};
+    ces.exit_status = exit_status;
+    ces.want_reply = want_reply;
+
+    return ces;
+
+}
+
+void Connection::parse_channel_close(const std::vector<uint8_t>& payload, Channel& channel) const {
+    if (!channel.open) {
+        throw std::runtime_error("Close request received for a closed channel");
+    }
+
+    if (channel.remote_close_received) {
+        throw std::runtime_error("Channel close already received");
+    }
+
+    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_CLOSE) {
+        throw std::runtime_error("Expected SSH_MSG_CHANNEL_CLOSE");
+    }
+
+    std::size_t position = 1;
+    uint32_t recipient_channel = ssh_encoding::read_uint32(payload, position);
+    if (recipient_channel != channel.local_id) {
+        throw std::runtime_error("Channel ids did not match");
+    }
+
+    if (position != payload.size()) {
+        throw std::runtime_error("Payload contains more bytes than expected");
+    }
+
+    channel.remote_close_received = true;
+}
+
+std::vector<uint8_t> Connection::create_channel_close(const Channel& channel) const {
+    if (!channel.open) {
+        throw std::runtime_error("Channel already closed");
+    }
+    
+    if (channel.local_close_sent) {
+        throw std::runtime_error("SSH_MSG_CHANNEL_CLOSE already been sent");
+    }
+
+    std::vector<uint8_t> payload;
+    payload.push_back(SSH_MSG_CHANNEL_CLOSE);
+    auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
+    payload.insert(payload.end(), remote_id.begin(), remote_id.end());
+    return payload;
 }
