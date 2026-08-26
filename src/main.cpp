@@ -13,6 +13,8 @@
 #include <unistd.h>
 #include <algorithm>
 #include <cerrno>
+#include "known_hosts/known_hosts.hpp"
+#include <cstdlib>
 
 namespace {
     constexpr uint8_t SSH_MSG_KEXINIT = 20;
@@ -341,7 +343,16 @@ int main() {
         if (result == -1) {
             throw std::runtime_error("Sodium could not be initialised");
         }
-        Socket sock("127.0.0.1", 22);
+        const std::string hostname = "127.0.0.1";
+        const uint16_t port = 22;
+        const char* home_directory = std::getenv("HOME");
+
+        if (home_directory == nullptr) {
+            throw std::runtime_error("HOME environment variable could not be accessed");
+        }
+        KnownHosts known_hosts(std::string(home_directory) + "/.conorssh/known_hosts");
+
+        Socket sock(hostname, port);
         IdentificationExchange id = exchange_identification(sock);
 
         Transport transport(sock);
@@ -399,15 +410,29 @@ int main() {
         std::array<uint8_t, 32> fingerprint = kex.calculate_host_key_fingerprint(ecdh_reply.server_host_key);
 
         std::string fingerprint_text = format_sha256_fingerprint(fingerprint);
-        std::cout << "Server host key fingerprint: " << fingerprint_text << '\n';
+        HostKeyStatus host_status = known_hosts.check(hostname, algorithms.host_key_algorithm, ecdh_reply.server_host_key);
 
-        std::string answer;
+        if (host_status == HostKeyStatus::Match) {
+            std::cout << "Server host key matches known host\n";
+        } else if (host_status == HostKeyStatus::Changed) {
+            std::cerr << "WARNING: Server host key has changed!\n";
+            std::cerr << "Received fingerprint: " << fingerprint_text << '\n';
+            throw std::runtime_error("Refusing connection due to changed host key");
+        } else {
+            std::cout << "Unknown server host key\n";
+            std::cout << "Fingerprint: " << fingerprint_text << '\n';
 
-        std::cout << "Do you trust this host key? [yes/no]: ";
-        std::getline(std::cin, answer);
+            std::cout << "Do you trust this host key? [yes/no]: ";
 
-        if (answer != "yes") {
-            throw std::runtime_error("Host key was not trusted"); 
+            std::string answer;
+            std::getline(std::cin, answer);
+
+            if (answer != "yes") {
+                throw std::runtime_error("Host key was not trusted");
+            }
+
+            known_hosts.add(hostname, algorithms.host_key_algorithm, ecdh_reply.server_host_key);
+            std::cout << "Host key saved\n";
         }
 
         std::array<uint8_t, 32> session_id = exchange_hash;
