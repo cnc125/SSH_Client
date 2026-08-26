@@ -15,5 +15,6 @@ uint32_t decode_uint32(const std::array<uint8_t, uint32_bytes>& bytes);
 void append_string(std::vector<uint8_t>& destination, const std::vector<uint8_t>& value);
 void append_string(std::vector<uint8_t>& destination, const std::string& value);
 std::vector<uint8_t> read_string(const std::vector<uint8_t>& payload, std::size_t& position);
+uint32_t read_uint32(const std::vector<uint8_t>& payload, std::size_t& position);
 
 }

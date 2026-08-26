@@ -1,5 +1,6 @@
 #include "socket/socket.hpp"
 #include "transport/transport.hpp"
+#include "connection/connection.hpp"
 #include "auth/auth.hpp"
 #include "kex/kex.hpp"
 #include "terminal/terminal.hpp"
@@ -12,6 +13,8 @@
 namespace {
     constexpr uint8_t SSH_MSG_KEXINIT = 20;
     constexpr uint8_t SSH_MSG_NEWKEYS = 21;
+    constexpr uint32_t LOCAL_WINDOW_TARGET = 1024 * 1024;
+    constexpr uint32_t LOCAL_WINDOW_THRESHOLD = 512 * 1024;
 }
 
 struct IdentificationExchange {
@@ -84,6 +87,136 @@ KexInit receive_kexinit(Transport& transport) {
     Kex kex;
     KexInit server_kexinit = kex.parse_kexinit(payload);
     return server_kexinit;
+}
+
+void handle_global_request(const std::vector<uint8_t>& payload, Connection& connection, Transport& transport) {
+    GlobalRequest gr = connection.parse_global_request(payload);
+    std::cout << "Received SSH_MSG_GLOBAL_REQUEST: " << gr.request_name << "\n";
+    if (gr.want_reply) {
+        transport.send_packet(connection.create_request_failure());
+    }
+}
+
+void open_session_channel(Connection& connection, Transport& transport, Channel& channel) {
+    transport.send_packet(connection.create_session_open(channel));
+
+    while (!channel.open) {
+        auto session_open_response = transport.receive_packet();
+        if (session_open_response.size() == 0) {
+            throw std::runtime_error("Packet contained 0 bytes");
+        }
+
+        if (session_open_response[0] == 91) {
+            connection.parse_open_confirmation(session_open_response, channel);
+            std::cout << "Connection opened\n";
+        }
+        else if (session_open_response[0] == 92) {
+            ChannelOpenFailure failure = connection.parse_open_failure(session_open_response, channel);
+            throw std::runtime_error("Connection failed to open");
+        }
+        else if (session_open_response[0] == 80) {
+            handle_global_request(session_open_response, connection, transport);
+        } else {
+            throw std::runtime_error("Unexpected response received during session channel opening");
+        }
+    }
+}
+
+void request_exec(Connection& connection, Transport& transport, Channel& channel, const std::string& command) {
+    transport.send_packet(connection.create_exec_request(channel, command));
+
+    bool exec_accepted = false;
+
+    while (!exec_accepted) {
+        auto command_response = transport.receive_packet();
+        if (command_response.size() == 0) {
+            throw std::runtime_error("Packet contained 0 bytes");
+        }
+        
+        if (command_response[0] == 99) {
+            connection.validate_channel_success(command_response, channel);
+            std::cout << "Channel Success\n";
+            exec_accepted = true;
+        }
+        else if (command_response[0] == 100) {
+            connection.validate_channel_failure(command_response, channel);
+            throw std::runtime_error("Channel Failure");
+        }
+        else if (command_response[0] == 80) {
+            handle_global_request(command_response, connection, transport);
+        }
+        else if (command_response[0] == 93) {
+            connection.parse_window_adjust(command_response, channel);
+        }
+        else {
+            throw std::runtime_error("Unexpected response received during command execution");
+        }
+    }
+}
+
+uint32_t process_command_messages(Connection& connection, Transport& transport, Channel& channel) {
+    while (channel.open) {
+        std::vector<uint8_t> response = transport.receive_packet();
+        bool consumed_local_window = false;
+        if (response.size() == 0) {
+            throw std::runtime_error("Packet contained 0 bytes");
+        }
+
+        uint8_t message_type = response[0];
+
+        if (message_type == 94) {
+            std::vector<uint8_t> data = connection.parse_channel_data(response, channel);
+            std::cout.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+            std::cout.flush();
+            consumed_local_window = true;
+        }
+        else if (message_type == 93) {
+            connection.parse_window_adjust(response, channel);
+        }
+        else if (message_type == 80) {
+            handle_global_request(response, connection, transport);
+        }
+        else if (message_type == 96) {
+            connection.parse_channel_eof(response, channel);
+            std::cout << "EOF received\n";
+        }
+        else if (message_type == 98) {
+            ChannelExitStatus channel_exit_status = connection.parse_exit_status(response, channel);
+            std::cout << "Remote exit status: " << channel_exit_status.exit_status << "\n";
+        }
+        else if (message_type == 97) {
+            connection.parse_channel_close(response, channel);
+            if (!channel.local_close_sent) {
+                transport.send_packet(connection.create_channel_close(channel));
+                channel.local_close_sent = true;
+            }
+            
+            if (channel.local_close_sent && channel.remote_close_received) {
+                channel.open = false;
+                std::cout << "Channel closed successfully\n";
+            }
+        }
+        else if (message_type == 95) {
+            ChannelExtendedData channel_extended_data = connection.parse_channel_extended_data(response, channel);
+            std::cerr.write(reinterpret_cast<const char*>(channel_extended_data.data.data()),static_cast<std::streamsize>(channel_extended_data.data.size()));
+            std::cerr.flush();
+            consumed_local_window = true;
+        }
+        else {
+            throw std::runtime_error("Unexpected message received when processing command");
+        }
+
+        if (consumed_local_window && channel.open && channel.local_window <= LOCAL_WINDOW_THRESHOLD) {
+            uint32_t difference = LOCAL_WINDOW_TARGET - channel.local_window;
+            auto adjust_packet = connection.create_window_adjust(channel, difference);
+            transport.send_packet(adjust_packet);
+            channel.local_window += difference;
+        }
+    }
+    if (!channel.exit_status_received) {
+        throw std::runtime_error("No exit status available");
+    }
+    return channel.exit_status;
 }
 
 int main() {
@@ -215,8 +348,26 @@ int main() {
             throw std::runtime_error("Password authentication rejected");
         }
         else {
-            throw std::runtime_error("Unexpected response");
+            throw std::runtime_error("Unexpected response - authentication");
         }
+
+
+        //CONNECTION LAYER
+        Connection connection;
+        Channel channel{};
+        channel.local_id = 0;
+        channel.local_window = LOCAL_WINDOW_TARGET;
+        channel.local_max_packet = 32 * 1024;
+
+        open_session_channel(connection, transport, channel);
+        request_exec(connection, transport, channel, "ls SSH-Cli");
+        uint32_t remote_status = process_command_messages(connection, transport, channel);
+        
+        if (remote_status == 0) {
+            std::cout << "Command succeeded\n";
+        } else {
+            std::cout << "Command failed with status: " << remote_status << '\n';
+        } 
   
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
