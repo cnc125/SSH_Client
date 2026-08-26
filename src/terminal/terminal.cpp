@@ -24,7 +24,16 @@ std::string Terminal::read_hidden_input(const std::string& prompt) {
     }
 
     std::string password;
-    bool read_succeeded = static_cast<bool>(std::getline(std::cin, password));
+    bool read_succeeded = false;
+
+    try {
+        read_succeeded = static_cast<bool>(std::getline(std::cin, password));
+    } catch (...) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &original);
+        std::cout << "\n";
+        throw;
+    }
+    
 
     if (tcsetattr(STDIN_FILENO, TCSANOW, &original) == -1) {
         throw std::runtime_error("Failed to reenable terminal echo");

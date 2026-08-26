@@ -12,6 +12,7 @@
 #include <poll.h>
 #include <unistd.h>
 #include <algorithm>
+#include <cerrno>
 
 namespace {
     constexpr uint8_t SSH_MSG_KEXINIT = 20;
@@ -255,6 +256,9 @@ void run_interactive_shell(Socket& sock, Connection& connection, Transport& tran
         int read_count = poll(inputs, 2, -1);
 
         if (read_count == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
             throw std::runtime_error("poll failed");
         }
 
@@ -323,6 +327,9 @@ void run_interactive_shell(Socket& sock, Connection& connection, Transport& tran
             if (channel.local_close_sent && channel.remote_close_received) {
                 channel.open = false;
             }
+        }
+        if (channel.open && (inputs[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            throw std::runtime_error("SSH socket closed unexpectedly");
         }
     }
     terminal.restore();
