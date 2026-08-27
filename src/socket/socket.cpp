@@ -10,12 +10,13 @@
 #include <string>
 
 
-Socket::Socket(const std::string& host, uint16_t port) {
-    fd_ = -1;
-
+Socket::Socket(const std::string& host, uint16_t port) : fd_(-1) {
     if (!create()) throw std::runtime_error("Failed to create socket");
 
-    if (!connect(host, port)) throw std::runtime_error("Failed to connect to " + host);
+    if (!connect(host, port)) {
+        close();
+        throw std::runtime_error("Failed to connect to " + host);
+    }
 }
 
 Socket::~Socket() {

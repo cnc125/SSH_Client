@@ -1,11 +1,11 @@
 #include "kex.hpp"
 #include "common/ssh_encoding.hpp"
+#include "common/ssh_messages.hpp"
 #include <stdexcept>
 #include <cstddef>
 #include <array>
 #include <algorithm>
 #include <string>
-#include <iostream>
 #include <sodium.h>
 #include <limits>
 #include <sstream>
@@ -13,7 +13,6 @@
 namespace {
     constexpr std::size_t bits_per_byte = 8;
     constexpr std::size_t length_of_key = 32;
-    constexpr std::size_t SSH_MSG_KEX_ECDH_INIT = 30;
 }
 
 KexInit Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
@@ -21,7 +20,7 @@ KexInit Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
     if (payload.size() < 1) {
         throw std::runtime_error("Payload should not be empty");
     }
-    if (payload[0] != 20) {
+    if (payload[0] != ssh_message::KEXINIT) {
         throw std::runtime_error("SSH KEXINIT packet was expected");
     }
 
@@ -51,21 +50,8 @@ KexInit Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
     std::string languages_cs = read_name_list(payload, position);
     std::string languages_sc = read_name_list(payload, position);
 
-    std::cout << "KEXINIT\n";
-    std::cout << "Kex Algorithms: " << kex_algorithms << "\n";
-    std::cout << "Host Key Algorithms: " << host_key_algorithms << "\n";
-    std::cout << "Encryption Algorithms, client → server: " << encryption_cs_algorithms << "\n";
-    std::cout << "Encryption Algorithms, server → client: " << encryption_sc_algorithms << "\n";
-    std::cout << "MAC client → server: " << mac_cs_algorithms << "\n";
-    std::cout << "MAC server → client: " << mac_sc_algorithms << "\n";
-    std::cout << "Compression client → server: " << compression_cs_algorithms << "\n";
-    std::cout << "Compression server → client: " << compression_sc_algorithms << "\n";
-    std::cout << "Languages client → server: " << languages_cs << "\n";
-    std::cout << "Languages server → client: " << languages_sc << "\n";
-
     //get first_kex_packet_follows
     bool first_kex_packet_follows = parse_boolean(payload, position);
-    std::cout << "First kex packet follows: " << first_kex_packet_follows << "\n";
 
     //reserved bytes
     if (payload.size() - position < uint32_bytes) {
@@ -111,7 +97,7 @@ std::string Kex::read_name_list(const std::vector<uint8_t>& payload, std::size_t
     std::copy_n(payload.begin() + position, length.size(), length.begin());
     uint32_t list_length = ssh_encoding::decode_uint32(length);
     position += uint32_bytes;
-    
+
     if (payload.size() - position < list_length) {
         throw std::runtime_error("Expected list");
     }
@@ -151,7 +137,7 @@ KexInit Kex::create_client_kexinit() {
     result.first_kex_packet_follows = false;
 
     std::vector<uint8_t>& raw_payload = result.raw_payload;
-    raw_payload.push_back(20);
+    raw_payload.push_back(ssh_message::KEXINIT);
     raw_payload.insert(raw_payload.end(), cookie.begin(), cookie.end());
     append_name_list(raw_payload, result.kex_algorithms);
     append_name_list(raw_payload, result.host_key_algorithms);
@@ -237,7 +223,7 @@ Curve25519State Kex::create_curve25519_keypair() const {
 
 std::vector<uint8_t> Kex::create_ecdh_init_payload(const Curve25519State& state) const {
     std::vector<uint8_t> payload{};
-    payload.push_back(SSH_MSG_KEX_ECDH_INIT); 
+    payload.push_back(ssh_message::KEX_ECDH_INIT);
     const auto length = ssh_encoding::encode_uint32(uint32_t(length_of_key));
     payload.insert(payload.end(), length.begin(), length.end());
     payload.insert(payload.end(), state.client_public_key.begin(), state.client_public_key.end());
@@ -249,7 +235,7 @@ EcdhReply Kex::parse_ecdh_reply(const std::vector<uint8_t>& payload) const {
     if (payload.size() < 1) {
         throw std::runtime_error("Payload should not be empty");
     }
-    if (payload[0] != 31) {
+    if (payload[0] != ssh_message::KEX_ECDH_REPLY) {
         throw std::runtime_error("SSH_MSG_KEX_ECDH_REPLY packet was expected");
     }
 
@@ -320,7 +306,7 @@ Ed25519VerificationData Kex::parse_ed25519_verification_data(const EcdhReply& re
     if (algorithm_name != negotiated_host_key_algorithm || algorithm_name != "ssh-ed25519"){
         throw std::runtime_error("Algorithm is not the negotiated ssh-ed25519.");
     }
-    
+
     std::vector<uint8_t> public_key = ssh_encoding::read_string(reply.server_host_key, position);
     if (public_key.size() != ed25519_data.public_key.size()) {
         throw std::runtime_error("Ed25519 public key must be 32 bytes");
@@ -338,7 +324,7 @@ Ed25519VerificationData Kex::parse_ed25519_verification_data(const EcdhReply& re
     if (algorithm_name != negotiated_host_key_algorithm || algorithm_sig_name != "ssh-ed25519"){
         throw std::runtime_error("Algorithm is not the negotiated ssh-ed25519.");
     }
-    
+
     std::vector<uint8_t> signature_bytes = ssh_encoding::read_string(reply.signature, position);
     if (signature_bytes.size() != ed25519_data.signature.size()) {
         throw std::runtime_error("Ed25519 signature must be 64 bytes");

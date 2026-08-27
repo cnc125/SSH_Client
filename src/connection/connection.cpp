@@ -1,25 +1,12 @@
 #include "connection.hpp"
 #include "common/ssh_encoding.hpp"
+#include "common/ssh_messages.hpp"
 #include <stdexcept>
 #include <array>
 #include <cstddef>
 #include <limits>
 
 namespace {
-    //SSH Message Types
-    constexpr uint8_t SSH_MSG_CHANNEL_OPEN = 90;
-    constexpr uint8_t SSH_MSG_CHANNEL_OPEN_CONFIRMATION = 91;
-    constexpr uint8_t SSH_MSG_CHANNEL_OPEN_FAILURE = 92;
-    constexpr uint8_t SSH_MSG_GLOBAL_REQUEST = 80;
-    constexpr uint8_t SSH_MSG_REQUEST_FAILURE = 82;
-    constexpr uint8_t SSH_MSG_CHANNEL_REQUEST = 98;
-    constexpr uint8_t SSH_MSG_CHANNEL_SUCCESS = 99;
-    constexpr uint8_t SSH_MSG_CHANNEL_FAILURE = 100;
-    constexpr uint8_t SSH_MSG_CHANNEL_WINDOW_ADJUST = 93;
-    constexpr uint8_t SSH_MSG_CHANNEL_DATA = 94;
-    constexpr uint8_t SSH_MSG_CHANNEL_EOF = 96;
-    constexpr uint8_t SSH_MSG_CHANNEL_CLOSE = 97;
-    constexpr uint8_t SSH_MSG_CHANNEL_EXTENDED_DATA = 95;
 
     constexpr uint32_t MIN_MAX_PACKET_SIZE = 32768;
 }
@@ -39,7 +26,7 @@ std::vector<uint8_t> Connection::create_session_open(const Channel& channel) con
     }
 
     std::vector<uint8_t> payload;
-    payload.push_back(SSH_MSG_CHANNEL_OPEN);
+    payload.push_back(ssh_message::CHANNEL_OPEN);
     ssh_encoding::append_string(payload, "session");
     auto local_id = ssh_encoding::encode_uint32(channel.local_id);
     payload.insert(payload.end(), local_id.begin(), local_id.end());
@@ -55,7 +42,7 @@ void Connection::parse_open_confirmation(const std::vector<uint8_t>& payload, Ch
         throw std::runtime_error("Channel already open");
     }
     
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_OPEN_CONFIRMATION) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_OPEN_CONFIRMATION) {
         throw std::runtime_error("Expected SSH_MSG_CHANNEL_OPEN_CONFIRMATION");
     }
 
@@ -89,7 +76,7 @@ ChannelOpenFailure Connection::parse_open_failure(const std::vector<uint8_t>& pa
         throw std::runtime_error("Open failure received for an already-open channel");
     }
 
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_OPEN_FAILURE) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_OPEN_FAILURE) {
         throw std::runtime_error("Expected SSH_MSG_CHANNEL_OPEN_FAILURE");
     }
 
@@ -122,7 +109,7 @@ ChannelOpenFailure Connection::parse_open_failure(const std::vector<uint8_t>& pa
 }
 
 GlobalRequest Connection::parse_global_request(const std::vector<uint8_t>& payload) const {
-    if (payload.size() == 0 || payload[0] != SSH_MSG_GLOBAL_REQUEST) {
+    if (payload.empty() || payload[0] != ssh_message::GLOBAL_REQUEST) {
         throw std::runtime_error("Expected SSH_MSG_GLOBAL_REQUEST");
     }
     std::size_t position = 1;
@@ -148,7 +135,7 @@ GlobalRequest Connection::parse_global_request(const std::vector<uint8_t>& paylo
 
 std::vector<uint8_t> Connection::create_request_failure() const {
     std::vector<uint8_t> payload;
-    payload.push_back(SSH_MSG_REQUEST_FAILURE);
+    payload.push_back(ssh_message::REQUEST_FAILURE);
     return payload;
 }
 
@@ -157,12 +144,12 @@ std::vector<uint8_t> Connection::create_exec_request(const Channel& channel, con
         throw std::runtime_error("Channel must be open");
     }
 
-    if (command.size() == 0) {
+    if (command.empty()) {
         throw std::runtime_error("Command must not be empty");
     }
     
     std::vector<uint8_t> payload;
-    payload.push_back(SSH_MSG_CHANNEL_REQUEST);
+    payload.push_back(ssh_message::CHANNEL_REQUEST);
     auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
     payload.insert(payload.end(), remote_id.begin(), remote_id.end());
     ssh_encoding::append_string(payload, "exec");
@@ -173,7 +160,7 @@ std::vector<uint8_t> Connection::create_exec_request(const Channel& channel, con
 }
 
 void Connection::validate_channel_success(const std::vector<uint8_t>& payload, const Channel& channel) const {
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_SUCCESS) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_SUCCESS) {
         throw std::runtime_error("Expected SSH_MSG_CHANNEL_SUCCESS");
     }
 
@@ -190,7 +177,7 @@ void Connection::validate_channel_success(const std::vector<uint8_t>& payload, c
  }
 
 void Connection::validate_channel_failure(const std::vector<uint8_t>& payload, const Channel& channel) const {
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_FAILURE) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_FAILURE) {
         throw std::runtime_error("Expected SSH_MSG_CHANNEL_FAILURE");
     }
 
@@ -211,7 +198,7 @@ void Connection::parse_window_adjust(const std::vector<uint8_t>& payload, Channe
         throw std::runtime_error("Window adjustment received for a closed channel");
     }
 
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_WINDOW_ADJUST) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_WINDOW_ADJUST) {
         throw std::runtime_error("Expected SSH_MSG_CHANNEL_WINDOW_ADJUST");
     }
 
@@ -244,7 +231,7 @@ std::vector<uint8_t> Connection::parse_channel_data(const std::vector<uint8_t>& 
         throw std::runtime_error("Channel data received for a closed channel");
     }
 
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_DATA) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_DATA) {
         throw std::runtime_error("Expected SSH_MSG_CHANNEL_DATA");
     }
 
@@ -283,7 +270,7 @@ void Connection::parse_channel_eof(const std::vector<uint8_t>& payload, Channel&
         throw std::runtime_error("EOF already received");
     }
 
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_EOF) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_EOF) {
         throw std::runtime_error("Expected SSH_MSG_CHANNEL_EOF");
     }
 
@@ -310,7 +297,7 @@ ChannelExitStatus Connection::parse_exit_status(const std::vector<uint8_t>& payl
         throw std::runtime_error("Exit status already received");
     }
 
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_REQUEST) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_REQUEST) {
         throw std::runtime_error("Expected SSH_MSG_CHANNEL_REQUEST");
     }
 
@@ -360,7 +347,7 @@ void Connection::parse_channel_close(const std::vector<uint8_t>& payload, Channe
         throw std::runtime_error("Channel close already received");
     }
 
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_CLOSE) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_CLOSE) {
         throw std::runtime_error("Expected SSH_MSG_CHANNEL_CLOSE");
     }
 
@@ -387,7 +374,7 @@ std::vector<uint8_t> Connection::create_channel_close(const Channel& channel) co
     }
 
     std::vector<uint8_t> payload;
-    payload.push_back(SSH_MSG_CHANNEL_CLOSE);
+    payload.push_back(ssh_message::CHANNEL_CLOSE);
     auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
     payload.insert(payload.end(), remote_id.begin(), remote_id.end());
     return payload;
@@ -398,7 +385,7 @@ ChannelExtendedData Connection::parse_channel_extended_data(const std::vector<ui
         throw std::runtime_error("Extended data received for a closed channel");
     }
 
-    if (payload.size() == 0 || payload[0] != SSH_MSG_CHANNEL_EXTENDED_DATA) {
+    if (payload.empty() || payload[0] != ssh_message::CHANNEL_EXTENDED_DATA) {
         throw std::runtime_error("Expected SSH_MSG_EXTENDED_DATA");
     }
 
@@ -445,7 +432,7 @@ std::vector<uint8_t> Connection::create_window_adjust(const Channel& channel, ui
     }
 
     std::vector<uint8_t> payload;
-    payload.push_back(SSH_MSG_CHANNEL_WINDOW_ADJUST);
+    payload.push_back(ssh_message::CHANNEL_WINDOW_ADJUST);
     auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
     payload.insert(payload.end(), remote_id.begin(), remote_id.end());
 
@@ -462,7 +449,7 @@ std::vector<uint8_t> Connection::create_pty_request(const Channel& channel, cons
         throw std::runtime_error("Channel already closed");
     }
 
-    if (terminal_type.size() == 0) {
+    if (terminal_type.empty()) {
         throw std::runtime_error("Must provide a non-empty terminal_type");
     }
 
@@ -471,7 +458,7 @@ std::vector<uint8_t> Connection::create_pty_request(const Channel& channel, cons
     }
 
     std::vector<uint8_t> payload;
-    payload.push_back(SSH_MSG_CHANNEL_REQUEST);
+    payload.push_back(ssh_message::CHANNEL_REQUEST);
     auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
     payload.insert(payload.end(), remote_id.begin(), remote_id.end());
     ssh_encoding::append_string(payload, "pty-req");
@@ -495,7 +482,7 @@ std::vector<uint8_t> Connection::create_pty_request(const Channel& channel, cons
     }
 
     std::vector<uint8_t> payload;
-    payload.push_back(SSH_MSG_CHANNEL_REQUEST);
+    payload.push_back(ssh_message::CHANNEL_REQUEST);
     auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
     payload.insert(payload.end(), remote_id.begin(), remote_id.end());
     ssh_encoding::append_string(payload, "shell");
@@ -525,7 +512,7 @@ std::vector<uint8_t> Connection::create_pty_request(const Channel& channel, cons
     }
 
     std::vector<uint8_t> payload;
-    payload.push_back(SSH_MSG_CHANNEL_DATA);
+    payload.push_back(ssh_message::CHANNEL_DATA);
     auto remote_id = ssh_encoding::encode_uint32(channel.remote_id);
     payload.insert(payload.end(), remote_id.begin(), remote_id.end());
     ssh_encoding::append_string(payload, data);

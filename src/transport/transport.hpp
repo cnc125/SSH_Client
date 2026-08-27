@@ -7,24 +7,32 @@
 
 #include "socket/socket.hpp"
 
+// Implements SSH packet framing, encryption, and packet authentication
 class Transport {
 
 public:
+    // Uses the connected socket for SSH packet transport
     Transport(Socket& sock);
+    // Releases the OpenSSL cipher contexts
     ~Transport();
 
-    //prevent accidental copying - due to OpenSSL pointers
+    // OpenSSL context ownership must not be copied
     Transport(const Transport&) = delete;
     Transport& operator=(const Transport&) = delete;
 
+    // Frames, authenticates, encrypts, and sends one SSH payload
     void send_packet(const std::vector<uint8_t>& payload);
 
+    // Receives, authenticates, decrypts, and extracts one SSH payload
     std::vector<uint8_t> receive_packet();
 
+    // Installs client-to-server encryption and MAC state after NEWKEYS
     void enable_outgoing_encryption(const std::array<uint8_t, 16>& iv, const std::array<uint8_t, 32>& encryption_key, const std::array<uint8_t, 32>& mac_key);
+    // Installs server-to-client encryption and MAC state after NEWKEYS
     void enable_incoming_encryption(const std::array<uint8_t, 16>& iv, const std::array<uint8_t, 32>& encryption_key, const std::array<uint8_t, 32>& mac_key);
 
 private:
+    // Packet framing and validation helpers
 
     static constexpr std::size_t packet_length_bytes = 4;
 
@@ -37,9 +45,12 @@ private:
     void validate_payload_size(std::size_t payload_size) const;
     std::vector<uint8_t> generate_padding(std::size_t padding_length) const;
 
+    // Calculates the packet MAC using its direction-specific sequence number
     std::array<uint8_t, 32> calculate_hmac(uint32_t sequence_number, const std::vector<uint8_t>& plaintext_packet, const std::array<uint8_t, 32>& mac_key) const;
 
+    // Applies the current outgoing cipher state
     std::vector<uint8_t> encrypt_outgoing_packet(const std::vector<uint8_t>& plaintext_packet);
+    // Applies the current incoming cipher state
     std::vector<uint8_t> decrypt_incoming_bytes(const std::vector<uint8_t>& ciphertext);
     
     Socket& sock_;
