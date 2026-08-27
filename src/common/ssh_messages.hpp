@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+// SSH transport, authentication, and connection protocol message numbers
 namespace ssh_message {
 
 inline constexpr uint8_t SERVICE_REQUEST = 5;
