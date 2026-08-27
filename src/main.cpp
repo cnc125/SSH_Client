@@ -73,7 +73,6 @@ IdentificationExchange exchange_identification(Socket &sock, const std::string& 
 
     std::string server_version = read_version(sock);
     id_exchange.server = server_version;
-    std::cout << "Server: " << server_version << "\n";
 
     if (server_version.substr(0, 7) != "SSH-2.0")
         throw std::runtime_error("Not SSH-2.0: " + server_version);
@@ -82,9 +81,6 @@ IdentificationExchange exchange_identification(Socket &sock, const std::string& 
     std::string line = client_version + "\r\n";
     std::vector<uint8_t> bytes(line.begin(), line.end());
     sock.write_exact(bytes.data(), bytes.size());
-
-    std::cout << "Client: " << client_version << "\n";
-    std::cout << "Version exchange complete\n";
 
     return id_exchange;
 }
@@ -106,7 +102,6 @@ KexInit receive_kexinit(Transport& transport) {
     if (payload[0] != ssh_message::KEXINIT) {
         throw std::runtime_error("SSH Packet doesn't contain expected KEX information");
     }
-    std::cout << "Received SSH_MSG_KEXINIT\n";
     Kex kex;
     KexInit server_kexinit = kex.parse_kexinit(payload);
     return server_kexinit;
@@ -114,7 +109,6 @@ KexInit receive_kexinit(Transport& transport) {
 
 void handle_global_request(const std::vector<uint8_t>& payload, Connection& connection, Transport& transport) {
     GlobalRequest gr = connection.parse_global_request(payload);
-    std::cout << "Received SSH_MSG_GLOBAL_REQUEST: " << gr.request_name << "\n";
     if (gr.want_reply) {
         transport.send_packet(connection.create_request_failure());
     }
@@ -131,7 +125,6 @@ void open_session_channel(Connection& connection, Transport& transport, Channel&
 
         if (session_open_response[0] == ssh_message::CHANNEL_OPEN_CONFIRMATION) {
             connection.parse_open_confirmation(session_open_response, channel);
-            std::cout << "Connection opened\n";
         }
         else if (session_open_response[0] == ssh_message::CHANNEL_OPEN_FAILURE) {
             ChannelOpenFailure failure = connection.parse_open_failure(session_open_response, channel);
@@ -156,7 +149,6 @@ void wait_for_channel_request_result(Connection& connection, Transport& transpor
         
         if (command_response[0] == ssh_message::CHANNEL_SUCCESS) {
             connection.validate_channel_success(command_response, channel);
-            std::cout << request_name + " request accepted\n";
             request_accepted = true;
         }
         else if (command_response[0] == ssh_message::CHANNEL_FAILURE) {
@@ -291,22 +283,6 @@ void perform_key_exchange(Transport& transport, const IdentificationExchange& id
     Kex kex;
     NegotiatedAlgorithms algorithms = kex.negotiate(client_kexinit, server_kexinit);
 
-    std::cout << "Negotiated algorithms:\n";
-    std::cout << "KEX: " << algorithms.kex_algorithm << '\n';
-    std::cout << "Host key: " << algorithms.host_key_algorithm << '\n';
-    std::cout << "Encryption client -> server: "
-      << algorithms.encryption_cs_algorithm << '\n';
-    std::cout << "Encryption server -> client: "
-      << algorithms.encryption_sc_algorithm << '\n';
-    std::cout << "MAC client -> server: "
-      << algorithms.mac_cs_algorithm << '\n';
-    std::cout << "MAC server -> client: "
-      << algorithms.mac_sc_algorithm << '\n';
-    std::cout << "Compression client -> server: "
-      << algorithms.compression_cs_algorithm << '\n';
-    std::cout << "Compression server -> client: "
-      << algorithms.compression_sc_algorithm << '\n';
-
     Curve25519State keypair;
     if (algorithms.kex_algorithm == "curve25519-sha256") {
         keypair = kex.create_curve25519_keypair();
@@ -316,20 +292,15 @@ void perform_key_exchange(Transport& transport, const IdentificationExchange& id
     std::vector<uint8_t> ecdh_init = kex.create_ecdh_init_payload(keypair);
     transport.send_packet(ecdh_init);
 
-    std::cout << "Sent SSH_MSG_KEX_ECDH_INIT\n";
-
     auto reply = transport.receive_packet();
     if (reply.empty()) {
         throw std::runtime_error("Empty SSH reply");
     }
     if (reply[0] != ssh_message::KEX_ECDH_REPLY) {
         throw std::runtime_error("Expected an SSH_MSG_KEX_ECDH_REPLY");
-    } else {
-        std::cout << "Received SSH_MSG_KEX_ECDH_REPLY\n";
     }
     EcdhReply ecdh_reply = kex.parse_ecdh_reply(reply);
     kex.calculate_shared_secret(keypair, ecdh_reply.server_public_key);
-    std::cout << "Shared secret calculated successfully\n";
 
     std::array<uint8_t, SHA256_DIGEST_SIZE> exchange_hash = kex.calculate_exchange_hash(id.client, id.server, client_kexinit, server_kexinit, keypair, ecdh_reply);
 
@@ -382,7 +353,6 @@ void perform_key_exchange(Transport& transport, const IdentificationExchange& id
     if (server_newkeys[0] != ssh_message::NEWKEYS) {
         throw std::runtime_error("Expected a SSH_MSG_NEWKEYS packet");
     }
-    std::cout << "NEWKEYS exchange completed" << "\n";
     transport.enable_incoming_encryption(transport_keys.iv_sc, transport_keys.encryption_key_sc, transport_keys.mac_key_sc);
 }
 
@@ -396,13 +366,9 @@ void authenticate_user(Transport& transport, Terminal& terminal, const std::stri
     std::vector<uint8_t> auth_response = transport.receive_packet();
     auth.validate_service_accept(auth_response);
 
-    std::cout << "User authentication service accepted\n";
 
     transport.send_packet(auth.create_none_auth_request(username));
-    AuthFailure auth_failure = auth.parse_auth_failure(transport.receive_packet());
-
-    std::cout << "Available Methods: " << auth_failure.available_methods << "\n";
-    std::cout << "Partial Success: " << auth_failure.partial_success << "\n";
+    auth.parse_auth_failure(transport.receive_packet());
 
     std::string password = terminal.read_hidden_input("Password: ");
     std::vector<uint8_t> auth_request = auth.create_password_auth_request(username, password);

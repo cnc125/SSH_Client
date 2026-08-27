@@ -6,7 +6,6 @@
 #include <array>
 #include <algorithm>
 #include <string>
-#include <iostream>
 #include <sodium.h>
 #include <limits>
 #include <sstream>
@@ -51,21 +50,8 @@ KexInit Kex::parse_kexinit(const std::vector<uint8_t>& payload) {
     std::string languages_cs = read_name_list(payload, position);
     std::string languages_sc = read_name_list(payload, position);
 
-    std::cout << "KEXINIT\n";
-    std::cout << "Kex Algorithms: " << kex_algorithms << "\n";
-    std::cout << "Host Key Algorithms: " << host_key_algorithms << "\n";
-    std::cout << "Encryption Algorithms, client → server: " << encryption_cs_algorithms << "\n";
-    std::cout << "Encryption Algorithms, server → client: " << encryption_sc_algorithms << "\n";
-    std::cout << "MAC client → server: " << mac_cs_algorithms << "\n";
-    std::cout << "MAC server → client: " << mac_sc_algorithms << "\n";
-    std::cout << "Compression client → server: " << compression_cs_algorithms << "\n";
-    std::cout << "Compression server → client: " << compression_sc_algorithms << "\n";
-    std::cout << "Languages client → server: " << languages_cs << "\n";
-    std::cout << "Languages server → client: " << languages_sc << "\n";
-
     //get first_kex_packet_follows
     bool first_kex_packet_follows = parse_boolean(payload, position);
-    std::cout << "First kex packet follows: " << first_kex_packet_follows << "\n";
 
     //reserved bytes
     if (payload.size() - position < uint32_bytes) {
