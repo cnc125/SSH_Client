@@ -18,12 +18,15 @@
 #include "known_hosts/known_hosts.hpp"
 #include "common/ssh_messages.hpp"
 #include <cstdlib>
+#include <limits>
 
 namespace {
+    constexpr uint16_t DEFAULT_SSH_PORT = 22;
+
     struct ClientConfig {
-        std::string hostname = "127.0.0.1";
-        uint16_t port = 22;
-        std::string username = "cnc125";
+        std::string hostname;
+        uint16_t port = DEFAULT_SSH_PORT;
+        std::string username;
         std::string identification = "SSH-2.0-ConorSSH_0.1";
         std::string known_hosts_relative_path = "/.conorssh/known_hosts";
     };
@@ -45,6 +48,56 @@ struct IdentificationExchange {
     std::string client;
     std::string server;
 };
+
+// Parses a username@host target and an optional SSH port.
+ClientConfig parse_client_config(int argc, char* argv[]) {
+    if (argc != 2 && argc != 3) {
+        throw std::runtime_error("Usage: ssh <username>@<host> [port]");
+    }
+
+    ClientConfig config{};
+    std::string target = argv[1];
+    std::size_t separator = target.find('@');
+
+    if (separator == std::string::npos || separator == 0 ||
+        separator == target.size() - 1 ||
+        target.find('@', separator + 1) != std::string::npos) {
+        throw std::runtime_error("Target must use the format <username>@<host>");
+    }
+
+    config.username = target.substr(0, separator);
+    config.hostname = target.substr(separator + 1);
+
+    if (argc == 3) {
+        std::string port_text = argv[2];
+        std::size_t parsed_characters = 0;
+        unsigned long parsed_port = 0;
+
+        try {
+            parsed_port = std::stoul(port_text, &parsed_characters);
+        } catch (const std::exception&) {
+            throw std::runtime_error("Port must be an integer from 1 to 65535");
+        }
+
+        if (parsed_characters != port_text.size() || parsed_port == 0 ||
+            parsed_port > std::numeric_limits<uint16_t>::max()) {
+            throw std::runtime_error("Port must be an integer from 1 to 65535");
+        }
+
+        config.port = static_cast<uint16_t>(parsed_port);
+    }
+
+    return config;
+}
+
+// Formats the identity used for persistent host-key verification.
+std::string known_host_identifier(const ClientConfig& config) {
+    if (config.port == DEFAULT_SSH_PORT) {
+        return config.hostname;
+    }
+
+    return "[" + config.hostname + "]:" + std::to_string(config.port);
+}
 
 std::string format_sha256_fingerprint(const std::array<uint8_t, SHA256_DIGEST_SIZE>& fingerprint) {
     std::size_t encoded_size = sodium_base64_ENCODED_LEN(fingerprint.size(), sodium_base64_VARIANT_ORIGINAL_NO_PADDING);
@@ -411,9 +464,10 @@ void run_connection_session(Socket& sock, Transport& transport, Terminal& termin
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     try {
-        const ClientConfig config{};
+        const ClientConfig config = parse_client_config(argc, argv);
+        const std::string host_identifier = known_host_identifier(config);
         int result = sodium_init();
         if (result == -1) {
             throw std::runtime_error("Sodium could not be initialised");
@@ -429,7 +483,7 @@ int main() {
         IdentificationExchange id = exchange_identification(sock, config.identification);
 
         Transport transport(sock);
-        perform_key_exchange(transport, id, known_hosts, config.hostname);
+        perform_key_exchange(transport, id, known_hosts, host_identifier);
 
         Terminal terminal;
         authenticate_user(transport, terminal, config.username);

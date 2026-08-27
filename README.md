@@ -127,19 +127,16 @@ make clean
 
 ## Run
 
-The current client configuration is defined in `ClientConfig` in
-`src/main.cpp`. Its defaults are:
-
-```text
-Host:     127.0.0.1
-Port:     22
-Username: cnc125
-```
-
-Run the client with:
+Provide the username and host in `username@host` format:
 
 ```bash
-./bin/ssh
+./bin/ssh <username>@<host> [port]
+```
+
+The port is optional and defaults to `22`. For example:
+
+```bash
+./bin/ssh cnc125@127.0.0.1
 ```
 
 After the host is verified and password authentication succeeds, the client
@@ -182,7 +179,6 @@ less secure without improving the SSH protocol implementation. This allowed me t
 - Password authentication only; public-key user authentication is not supported
 - No SSH rekeying during long-lived sessions
 - Fixed supported algorithm suite
-- Host, port and username are currently configured in source and not input by user
 - One interactive session channel per connection
 - No proxying, forwarding, SFTP or SCP support
 
