@@ -37,7 +37,7 @@ and run an interactive remote shell.
 | Compression | `none` |
 | User authentication | Password |
 
-I chooe this small set of algorithms to keep the implementation focused whilst 
+I chose this small set of algorithms to keep the implementation focused whilst 
 including every major stage of a real SSHv2 connection.
 
 ## How It Works
