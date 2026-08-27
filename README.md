@@ -1,7 +1,7 @@
 # ConorSSH
 
-This is a SSHv2 client written in C++17; I made the project to strengthen my systems
-programming and learn about network protocols and cyptography. This project implements
+This is an SSHv2 client written in C++17; I made the project to strengthen my systems
+programming and learn about network protocols and cryptography. This project implements
 the SSH protocol itself and is not a wrapped SSH client library.
 
 ConorSSH can negotiate a secure transport, authenticate an OpenSSH server,
@@ -37,7 +37,7 @@ and run an interactive remote shell.
 | Compression | `none` |
 | User authentication | Password |
 
-I choose this small set of algorithms to keep the implementation focused whilst 
+I chooe this small set of algorithms to keep the implementation focused whilst 
 including every major stage of a real SSHv2 connection.
 
 ## How It Works
